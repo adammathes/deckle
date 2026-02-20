@@ -1,10 +1,12 @@
 // deckle: Fetch URLs and produce clean HTML or epub for e-readers.
 //
 // Single article mode:
-//   deckle [options] <URL>
+//
+//	deckle [options] <URL>
 //
 // Epub mode (multiple articles):
-//   deckle [options] -epub -o output.epub <URL|file> [<URL|file>...]
+//
+//	deckle [options] -epub -o output.epub <URL|file> [<URL|file>...]
 package main
 
 import (
@@ -13,6 +15,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -123,15 +126,37 @@ func main() {
 		}
 
 		// Process each URL
-		var articles []string
+		// Parallelize with a bounded semaphore to avoid overwhelming resources
+		rawArticles := make([]string, len(urls))
+		success := make([]bool, len(urls))
+		var wg sync.WaitGroup
+		sem := make(chan struct{}, 5) // Limit to 5 concurrent jobs
+
 		for i, rawURL := range urls {
-			fmt.Fprintf(os.Stderr, "[%d/%d] %s\n", i+1, len(urls), rawURL)
-			html, _, err := processURL(rawURL, opts, *timeout, *userAgent, "")
-			if err != nil {
-				fmt.Fprintf(os.Stderr, "  Error: %v (skipping)\n", err)
-				continue
+			wg.Add(1)
+			go func(i int, rawURL string) {
+				defer wg.Done()
+				sem <- struct{}{}        // Acquire
+				defer func() { <-sem }() // Release
+
+				fmt.Fprintf(os.Stderr, "[%d/%d] %s\n", i+1, len(urls), rawURL)
+				html, _, err := processURL(rawURL, opts, *timeout, *userAgent, "")
+				if err != nil {
+					fmt.Fprintf(os.Stderr, "  Error: %v (skipping)\n", err)
+					return
+				}
+				rawArticles[i] = html
+				success[i] = true
+			}(i, rawURL)
+		}
+		wg.Wait()
+
+		// Filter successful articles preserving order
+		var articles []string
+		for i, s := range success {
+			if s {
+				articles = append(articles, rawArticles[i])
 			}
-			articles = append(articles, html)
 		}
 
 		if len(articles) == 0 {
