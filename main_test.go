@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -276,4 +277,11 @@ func TestPipeline_ReadabilityStripsBoilerplate(t *testing.T) {
 	if strings.Contains(content, "Trending") {
 		t.Error("sidebar should be stripped")
 	}
+}
+
+func TestMain(m *testing.M) {
+	// Enable local fetching for all tests by default, so existing tests using httptest pass.
+	// Security tests (e.g. TestSSRFProtection) should explicitly unset this variable.
+	os.Setenv("DECKLE_TEST_ALLOW_LOCAL", "1")
+	os.Exit(m.Run())
 }

@@ -1,10 +1,12 @@
 // deckle: Fetch URLs and produce clean HTML or epub for e-readers.
 //
 // Single article mode:
-//   deckle [options] <URL>
+//
+//	deckle [options] <URL>
 //
 // Epub mode (multiple articles):
-//   deckle [options] -epub -o output.epub <URL|file> [<URL|file>...]
+//
+//	deckle [options] -epub -o output.epub <URL|file> [<URL|file>...]
 package main
 
 import (

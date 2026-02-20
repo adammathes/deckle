@@ -27,16 +27,16 @@ type utlsConn struct {
 func (c *utlsConn) ConnectionState() tls.ConnectionState {
 	cs := c.UConn.ConnectionState()
 	return tls.ConnectionState{
-		Version:                     cs.Version,
-		HandshakeComplete:           cs.HandshakeComplete,
-		CipherSuite:                 cs.CipherSuite,
-		NegotiatedProtocol:          cs.NegotiatedProtocol,
-		NegotiatedProtocolIsMutual:  cs.NegotiatedProtocolIsMutual,
-		ServerName:                  cs.ServerName,
-		PeerCertificates:            cs.PeerCertificates,
-		VerifiedChains:              cs.VerifiedChains,
-		OCSPResponse:                cs.OCSPResponse,
-		TLSUnique:                   cs.TLSUnique,
+		Version:                    cs.Version,
+		HandshakeComplete:          cs.HandshakeComplete,
+		CipherSuite:                cs.CipherSuite,
+		NegotiatedProtocol:         cs.NegotiatedProtocol,
+		NegotiatedProtocolIsMutual: cs.NegotiatedProtocolIsMutual,
+		ServerName:                 cs.ServerName,
+		PeerCertificates:           cs.PeerCertificates,
+		VerifiedChains:             cs.VerifiedChains,
+		OCSPResponse:               cs.OCSPResponse,
+		TLSUnique:                  cs.TLSUnique,
 	}
 }
 
@@ -50,16 +50,16 @@ func newBrowserClient(timeout time.Duration) *http.Client {
 
 	// HTTP/1.1 transport with utls dialer
 	h1Transport := &http.Transport{
-		DialContext: dialer.DialContext,
+		DialContext: safeDialContext(dialer),
 	}
 
 	// Custom round tripper that dials with utls and routes to h1 or h2
 	// based on ALPN negotiation.
 	rt := &browserTransport{
-		dialer:      dialer,
-		h1:          h1Transport,
-		h2:          h2Transport,
-		timeout:     timeout,
+		dialer:  dialer,
+		h1:      h1Transport,
+		h2:      h2Transport,
+		timeout: timeout,
 	}
 
 	return &http.Client{
@@ -75,11 +75,11 @@ type browserTransport struct {
 	timeout time.Duration
 	mu      sync.Mutex
 	// Cache TLS connections per host to allow connection reuse
-	conns   map[string]net.Conn
+	conns map[string]net.Conn
 }
 
 func (bt *browserTransport) dialUTLS(ctx context.Context, network, addr string) (net.Conn, string, error) {
-	conn, err := bt.dialer.DialContext(ctx, network, addr)
+	conn, err := safeDialContext(bt.dialer)(ctx, network, addr)
 	if err != nil {
 		return nil, "", err
 	}
@@ -153,7 +153,12 @@ func fetchHTML(rawURL string, timeout time.Duration, userAgent string) ([]byte, 
 	if parsed.Scheme == "https" {
 		client = newBrowserClient(timeout)
 	} else {
-		client = &http.Client{Timeout: timeout}
+		client = &http.Client{
+			Timeout: timeout,
+			Transport: &http.Transport{
+				DialContext: safeDialContext(&net.Dialer{Timeout: timeout}),
+			},
+		}
 	}
 
 	req, err := http.NewRequest("GET", rawURL, nil)

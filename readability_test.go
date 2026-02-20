@@ -1,11 +1,11 @@
 package main
 
 import (
+	"bytes"
 	"encoding/base64"
 	"image"
 	"image/color"
 	"image/png"
-	"bytes"
 	"net/url"
 	"strings"
 	"testing"
