@@ -15,9 +15,11 @@ import (
 	_ "image/png"
 	"io"
 	"math"
+	"net/http"
 	"os"
 	"regexp"
 	"strings"
+	"time"
 
 	_ "golang.org/x/image/webp"
 )
@@ -190,7 +192,84 @@ var (
 	dataURIExtractRe = regexp.MustCompile(`data:([^;]+);base64,([^\s",]+)`)
 	// Extracts alt attribute
 	altRe = regexp.MustCompile(`\balt\s*=\s*"([^"]*)"`)
+	// Matches data-src or data-srcset on img tags (lazy loading)
+	lazySrcRe    = regexp.MustCompile(`(<img\b[^>]*?)\bdata-src=`)
+	lazySrcsetRe = regexp.MustCompile(`(<img\b[^>]*?)\bdata-srcset=`)
 )
+
+// Matches <img ... src="https://..."> (external URL images)
+var extImgRe = regexp.MustCompile(`(<img\b[^>]*?\bsrc\s*=\s*")(https?://[^"]+)(")`)
+
+var httpClient = &http.Client{Timeout: 30 * time.Second}
+
+// promoteLazySrc rewrites data-src="..." to src="..." on img tags
+// that use lazy loading, so downstream tools see the real image URLs.
+func promoteLazySrc(html []byte) []byte {
+	html = lazySrcRe.ReplaceAll(html, []byte("${1}src="))
+	html = lazySrcsetRe.ReplaceAll(html, []byte("${1}srcset="))
+	return html
+}
+
+// fetchAndEmbed downloads external image URLs and embeds them as data URIs.
+func fetchAndEmbed(html []byte) []byte {
+	var fetched int
+	html = extImgRe.ReplaceAllFunc(html, func(match []byte) []byte {
+		parts := extImgRe.FindSubmatch(match)
+		if parts == nil {
+			return match
+		}
+		prefix := parts[1]
+		url := string(parts[2])
+		suffix := parts[3]
+
+		resp, err := httpClient.Get(url)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Warning: could not fetch %s: %v\n", url, err)
+			return match
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode != 200 {
+			fmt.Fprintf(os.Stderr, "Warning: HTTP %d for %s\n", resp.StatusCode, url)
+			return match
+		}
+
+		data, err := io.ReadAll(resp.Body)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Warning: could not read %s: %v\n", url, err)
+			return match
+		}
+
+		// Detect MIME from Content-Type header or sniff
+		mime := resp.Header.Get("Content-Type")
+		if i := strings.Index(mime, ";"); i >= 0 {
+			mime = mime[:i]
+		}
+		mime = strings.TrimSpace(mime)
+		if mime == "" || mime == "application/octet-stream" {
+			mime = http.DetectContentType(data)
+			if i := strings.Index(mime, ";"); i >= 0 {
+				mime = mime[:i]
+			}
+		}
+
+		encoded := base64.StdEncoding.EncodeToString(data)
+		fetched++
+
+		var out bytes.Buffer
+		out.Write(prefix)
+		out.WriteString("data:")
+		out.WriteString(mime)
+		out.WriteString(";base64,")
+		out.WriteString(encoded)
+		out.Write(suffix)
+		return out.Bytes()
+	})
+
+	if fetched > 0 {
+		fmt.Fprintf(os.Stderr, "Fetched and embedded %d external images\n", fetched)
+	}
+	return html
+}
 
 type stats struct {
 	count         int
@@ -229,6 +308,11 @@ func tryOptimizeDataURI(mime, b64data string, opts optimizeOpts, st *stats) stri
 
 func processHTML(html []byte, opts optimizeOpts) []byte {
 	var st stats
+
+	// Phase 0: Promote lazy-loaded images (data-src → src) and
+	// fetch any external image URLs, embedding them as data URIs.
+	html = promoteLazySrc(html)
+	html = fetchAndEmbed(html)
 
 	// Phase 1: Collapse <picture> elements.
 	// Each <picture> may contain multiple <source srcset="data:..."> with
