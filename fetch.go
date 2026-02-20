@@ -18,6 +18,8 @@ import (
 
 const defaultUA = "Mozilla/5.0 (X11; Linux x86_64; rv:133.0) Gecko/20100101 Firefox/133.0"
 
+const maxBodySize = 10 * 1024 * 1024 // 10MB
+
 // utlsConn wraps a utls.UConn and satisfies net.Conn + the
 // ConnectionState interface that net/http2 needs.
 type utlsConn struct {
@@ -182,7 +184,7 @@ func fetchHTML(rawURL string, timeout time.Duration, userAgent string) ([]byte, 
 		return nil, nil, fmt.Errorf("HTTP %d for %s", resp.StatusCode, rawURL)
 	}
 
-	body, err := io.ReadAll(resp.Body)
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxBodySize))
 	if err != nil {
 		return nil, nil, fmt.Errorf("reading response: %w", err)
 	}
