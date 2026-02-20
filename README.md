@@ -35,7 +35,7 @@ https://example.com/article-two
 Then run:
 
 ```fish
-source urls2epub-5.fish
+source urls2epub.fish
 urls2epub my-reading-list.txt my-book.epub
 ```
 
@@ -51,7 +51,7 @@ urls2epub my-reading-list.txt my-book.epub
 
 ## Files
 
-- `urls2epub-5.fish` — main pipeline script (fish shell function)
+- `urls2epub.fish` — main pipeline script (fish shell function)
 - `html-img-optimize/` — Go tool for optimizing base64-embedded images in HTML
 - `html-normalize-headings.py` — Python script for normalizing heading hierarchy
 - `darksoftware/urls.txt` — example URL list
