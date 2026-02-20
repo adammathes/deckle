@@ -152,7 +152,7 @@ func TestPipeline_Medium(t *testing.T) {
 		t.Errorf("article content suspiciously small (%d chars)", len(content))
 	}
 
-	// Process images
+	// Process images — Medium uses <picture> with external srcset URLs
 	opts := optimizeOpts{maxWidth: 800, quality: 60, grayscale: true}
 	result := processArticleImages([]byte(content), opts)
 
@@ -165,6 +165,15 @@ func TestPipeline_Medium(t *testing.T) {
 	}
 	if len(final) < 1000 {
 		t.Errorf("final output suspiciously small (%d chars)", len(final))
+	}
+
+	// Verify images were fetched from Medium's picture/srcset elements
+	imgCount := strings.Count(final, "<img ")
+	if imgCount < 5 {
+		t.Errorf("expected at least 5 images in Medium article, got %d", imgCount)
+	}
+	if !strings.Contains(final, "data:image/jpeg;base64,") {
+		t.Error("expected embedded JPEG images from Medium's picture elements")
 	}
 }
 

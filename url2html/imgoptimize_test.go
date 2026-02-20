@@ -173,6 +173,51 @@ func TestProcessArticleImages_SVGPassthrough(t *testing.T) {
 	}
 }
 
+func TestPickBestSrcsetURL(t *testing.T) {
+	// Medium-style picture element with webp and jpeg sources
+	medium := []byte(`<picture>
+		<source srcSet="https://miro.medium.com/v2/resize:fit:640/format:webp/1*abc.jpeg 640w, https://miro.medium.com/v2/resize:fit:1400/format:webp/1*abc.jpeg 1400w" type="image/webp"/>
+		<source srcSet="https://miro.medium.com/v2/resize:fit:640/1*abc.jpeg 640w, https://miro.medium.com/v2/resize:fit:1400/1*abc.jpeg 1400w"/>
+		<img alt="" width="700" height="382"/>
+	</picture>`)
+
+	url := pickBestSrcsetURL(medium)
+	if url == "" {
+		t.Fatal("expected URL from Medium picture element")
+	}
+	// Should prefer non-webp URL
+	if strings.Contains(url, "format:webp") {
+		t.Errorf("should prefer non-webp, got: %s", url)
+	}
+	// Should pick the largest (1400w)
+	if !strings.Contains(url, "fit:1400") {
+		t.Errorf("should pick largest variant, got: %s", url)
+	}
+}
+
+func TestPickBestSrcsetURL_WebpOnly(t *testing.T) {
+	webpOnly := []byte(`<picture>
+		<source srcSet="https://example.com/img.webp 640w, https://example.com/img-lg.webp 1200w" type="image/webp"/>
+		<img alt=""/>
+	</picture>`)
+
+	url := pickBestSrcsetURL(webpOnly)
+	if url == "" {
+		t.Fatal("expected URL even when only webp available")
+	}
+	if !strings.Contains(url, "img-lg.webp") {
+		t.Errorf("should pick largest webp, got: %s", url)
+	}
+}
+
+func TestPickBestSrcsetURL_NoURLs(t *testing.T) {
+	empty := []byte(`<picture><img alt=""/></picture>`)
+	url := pickBestSrcsetURL(empty)
+	if url != "" {
+		t.Errorf("expected empty for picture with no srcset URLs, got: %s", url)
+	}
+}
+
 func TestHumanSize(t *testing.T) {
 	tests := []struct {
 		input int64

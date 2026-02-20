@@ -187,6 +187,8 @@ var (
 	pictureRe = regexp.MustCompile(`(?s)<picture\b[^>]*>.*?</picture>`)
 	// Extracts data URIs from srcset or src attributes inside <source>/<img> tags
 	dataURIExtractRe = regexp.MustCompile(`data:([^;]+);base64,([^\s",]+)`)
+	// Extracts external URLs from srcset attributes (e.g. "https://...jpg 640w, https://...jpg 1400w")
+	extSrcsetURLRe = regexp.MustCompile(`(https?://[^\s",]+)(?:\s+\d+w)?`)
 	// Extracts alt attribute
 	altRe = regexp.MustCompile(`\balt\s*=\s*"([^"]*)"`)
 	// Matches data-src or data-srcset on img tags (lazy loading)
@@ -311,6 +313,85 @@ func tryOptimizeDataURI(mime, b64data string, opts optimizeOpts, st *stats) stri
 	return uri
 }
 
+// fetchImage downloads an image URL and returns its bytes and MIME type.
+func fetchImage(imgURL string) ([]byte, string, error) {
+	resp, err := getImageClient().Get(imgURL)
+	if err != nil {
+		return nil, "", err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != 200 {
+		return nil, "", fmt.Errorf("HTTP %d", resp.StatusCode)
+	}
+
+	data, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, "", err
+	}
+
+	mime := resp.Header.Get("Content-Type")
+	if i := strings.Index(mime, ";"); i >= 0 {
+		mime = mime[:i]
+	}
+	mime = strings.TrimSpace(mime)
+	if mime == "" || mime == "application/octet-stream" {
+		mime = http.DetectContentType(data)
+		if i := strings.Index(mime, ";"); i >= 0 {
+			mime = mime[:i]
+		}
+	}
+	return data, mime, nil
+}
+
+// pickBestSrcsetURL extracts URLs from a srcset attribute value and picks
+// the largest one (by the "Nw" width descriptor). Prefers non-webp URLs
+// when available at similar sizes.
+func pickBestSrcsetURL(pictureHTML []byte) string {
+	matches := extSrcsetURLRe.FindAllSubmatch(pictureHTML, -1)
+	if len(matches) == 0 {
+		return ""
+	}
+
+	// Collect unique URLs, preferring non-webp formats
+	var bestURL string
+	var bestWidth int
+	for _, m := range matches {
+		u := string(m[1])
+		// Skip webp format URLs if we can (Medium provides both)
+		if strings.Contains(u, "/format:webp/") {
+			continue
+		}
+		// Parse width from "Nw" descriptor if present
+		w := 0
+		full := string(m[0])
+		if idx := strings.LastIndex(full, " "); idx > 0 {
+			fmt.Sscanf(full[idx+1:], "%dw", &w)
+		}
+		if w > bestWidth || bestURL == "" {
+			bestURL = u
+			bestWidth = w
+		}
+	}
+
+	// If all URLs were webp, take the largest webp
+	if bestURL == "" {
+		for _, m := range matches {
+			u := string(m[1])
+			w := 0
+			full := string(m[0])
+			if idx := strings.LastIndex(full, " "); idx > 0 {
+				fmt.Sscanf(full[idx+1:], "%dw", &w)
+			}
+			if w > bestWidth || bestURL == "" {
+				bestURL = u
+				bestWidth = w
+			}
+		}
+	}
+
+	return bestURL
+}
+
 // processArticleImages handles all image processing for article HTML:
 // promotes lazy-loaded images, fetches external images, collapses <picture>
 // elements, and optimizes all images for e-readers.
@@ -330,29 +411,50 @@ func processArticleImages(html []byte, opts optimizeOpts) []byte {
 			alt = string(m[1])
 		}
 
+		// First try: data URIs already embedded
 		uris := dataURIExtractRe.FindAllSubmatch(match, -1)
-		if len(uris) == 0 {
-			return match
+		if len(uris) > 0 {
+			for _, u := range uris {
+				mime := string(u[1])
+				b64 := string(u[2])
+				uri := tryOptimizeDataURI(mime, b64, opts, &st)
+				if uri != "" {
+					return []byte(fmt.Sprintf(`<img src="%s" alt="%s">`, uri, alt))
+				}
+			}
+
+			// None were optimizable — keep first source as img
+			for _, u := range uris {
+				mime := string(u[1])
+				b64 := string(u[2])
+				raw, err := decodeBase64(b64)
+				if err != nil {
+					continue
+				}
+				encoded := base64.StdEncoding.EncodeToString(raw)
+				return []byte(fmt.Sprintf(`<img src="data:%s;base64,%s" alt="%s">`, mime, encoded, alt))
+			}
 		}
 
-		for _, u := range uris {
-			mime := string(u[1])
-			b64 := string(u[2])
-			uri := tryOptimizeDataURI(mime, b64, opts, &st)
+		// Second try: external URLs in srcset (e.g. Medium)
+		imgURL := pickBestSrcsetURL(match)
+		if imgURL != "" {
+			data, mime, err := fetchImage(imgURL)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Warning: could not fetch picture image %s: %v\n", imgURL, err)
+				return match
+			}
+
+			uri, jpegLen := optimizeImage(data, mime, opts)
 			if uri != "" {
+				st.originalTotal += int64(len(data))
+				st.optimizedTotal += int64(jpegLen)
+				st.count++
 				return []byte(fmt.Sprintf(`<img src="%s" alt="%s">`, uri, alt))
 			}
-		}
 
-		// None were optimizable — keep first source as img
-		for _, u := range uris {
-			mime := string(u[1])
-			b64 := string(u[2])
-			raw, err := decodeBase64(b64)
-			if err != nil {
-				continue
-			}
-			encoded := base64.StdEncoding.EncodeToString(raw)
+			// Can't optimize (SVG/AVIF) — embed as-is
+			encoded := base64.StdEncoding.EncodeToString(data)
 			return []byte(fmt.Sprintf(`<img src="data:%s;base64,%s" alt="%s">`, mime, encoded, alt))
 		}
 
