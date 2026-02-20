@@ -1,56 +1,49 @@
 # urls2epub
 
-Convert a list of URLs into an optimized epub for e-readers.
+Turn a reading list into a clean epub. Paste some URLs, get a book for your e-reader — no ads, no popups, no cookie banners, just the articles and their images.
 
-**Pipeline:** url2html (fetch + readability + image optimize + headings) → pandoc (epub)
+The tool fetches each article, strips away everything that isn't content, optimizes images for e-ink displays, and packages the result as an epub with a table of contents.
 
-## Prerequisites
+## Quick start
 
 ```bash
-# Go tools
-go build -o url2html ./url2html/
+# Build (requires Go 1.24+)
+cd url2html && go install ./... && cd ..
 
-# System packages
-# Ubuntu/Debian:
-sudo apt install pandoc fish
-```
+# Create a reading list
+cat > reading-list.txt <<EOF
+https://example.com/interesting-article
+https://medium.com/@someone/another-great-post
+EOF
 
-Make sure `url2html` and `pandoc` are on your `$PATH`.
-
-## Usage
-
-Create a text file with one URL per line (blank lines and `#` comments are ignored):
-
-```
-# my-reading-list.txt
-https://example.com/article-one
-https://example.com/article-two
-```
-
-Then run:
-
-```fish
+# Convert to epub
 source urls2epub.fish
-urls2epub my-reading-list.txt my-book.epub
+urls2epub reading-list.txt reading-list.epub
 ```
 
-Or use `url2html` directly on a single URL:
+You'll also need [pandoc](https://pandoc.org/installing.html) and [fish](https://fishshell.com/) installed.
+
+## How it works
+
+Each URL goes through a single Go binary (`url2html`) that:
+
+1. **Fetches** the page with browser-like TLS fingerprinting (handles Cloudflare, Medium, etc.)
+2. **Extracts** the article using Mozilla's Readability algorithm — strips nav, footers, ads, sidebars
+3. **Optimizes images** — fetches external images, collapses `<picture>` elements, resizes for e-ink (800px wide, grayscale JPEG)
+4. **Normalizes headings** — extracts the title, gives each article a clean H1 for epub chapter breaks
+
+Then `pandoc` combines all articles into an epub3 with a table of contents.
+
+## Single article mode
+
+Process a single URL without building an epub:
 
 ```bash
-url2html --grayscale https://example.com/article > article.html
+url2html https://example.com/article > article.html
+url2html --grayscale -o article.html https://example.com/article
 ```
 
-## What each stage does
-
-| Stage | Tool | Purpose |
-|-------|------|---------|
-| Fetch | `url2html` | Downloads the page HTML via HTTP |
-| Extract | `url2html` | Strips navigation, footers, ads — keeps only article content (go-readability) |
-| Images | `url2html` | Fetches external images, collapses `<picture>` elements, resizes to 800px wide, converts to grayscale JPEG at quality 60 |
-| Headings | `url2html` | Extracts article title, injects as H1, shifts content headings to H2+ |
-| Build | `pandoc` | Combines all articles into epub3 with table of contents |
-
-## url2html options
+### Options
 
 ```
 url2html [options] <URL>
@@ -60,11 +53,10 @@ url2html [options] <URL>
   --title STRING      Override article title
   -o FILE             Output file (default: stdout)
   --timeout DURATION  HTTP fetch timeout (default: 30s)
-  --user-agent STRING HTTP User-Agent header
 ```
 
 ## Files
 
-- `urls2epub.fish` — main pipeline script (fish shell function)
-- `url2html/` — Go tool that fetches, extracts, and optimizes articles
+- `urls2epub.fish` — batch pipeline: loops URLs, calls url2html, then pandoc
+- `url2html/` — Go binary that does the heavy lifting
 - `darksoftware/urls.txt` — example URL list
