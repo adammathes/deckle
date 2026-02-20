@@ -1,4 +1,4 @@
-# rebind
+# deckle
 
 Turn a reading list into a clean epub. Paste some URLs, get a book for your e-reader — no ads, no popups, no cookie banners, just the articles and their images.
 
@@ -17,7 +17,7 @@ https://medium.com/@someone/another-great-post
 EOF
 
 # Convert to epub
-rebind -epub -grayscale -o reading-list.epub reading-list.txt
+deckle -epub -grayscale -o reading-list.epub reading-list.txt
 ```
 
 ## How it works
@@ -31,14 +31,14 @@ rebind -epub -grayscale -o reading-list.epub reading-list.txt
 ## Epub mode
 
 ```bash
-rebind -epub -grayscale -o output.epub urls.txt
-rebind -epub -o output.epub https://example.com/article1 https://example.com/article2
+deckle -epub -grayscale -o output.epub urls.txt
+deckle -epub -o output.epub https://example.com/article1 https://example.com/article2
 ```
 
 You can mix URL files and individual URLs:
 
 ```bash
-rebind -epub -o output.epub urls.txt https://example.com/bonus-article
+deckle -epub -o output.epub urls.txt https://example.com/bonus-article
 ```
 
 ## Single article mode
@@ -46,8 +46,8 @@ rebind -epub -o output.epub urls.txt https://example.com/bonus-article
 Process a single URL to HTML:
 
 ```bash
-rebind https://example.com/article > article.html
-rebind -grayscale -o article.html https://example.com/article
+deckle https://example.com/article > article.html
+deckle -grayscale -o article.html https://example.com/article
 ```
 
 ## Options

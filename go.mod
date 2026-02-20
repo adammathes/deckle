@@ -1,4 +1,4 @@
-module rebind
+module github.com/adammathes/deckle
 
 go 1.24.4
 
