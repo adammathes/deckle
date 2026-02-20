@@ -28,13 +28,13 @@ func TestExtractArticle_BasicHTML(t *testing.T) {
 	</body></html>`
 
 	u, _ := url.Parse("https://example.com/article")
-	content, title, err := extractArticle([]byte(html), u)
+	content, meta, err := extractArticle([]byte(html), u)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	if title != "Test Article" {
-		t.Errorf("title = %q, want %q", title, "Test Article")
+	if meta.Title != "Test Article" {
+		t.Errorf("title = %q, want %q", meta.Title, "Test Article")
 	}
 
 	if !strings.Contains(content, "test article with enough content") {

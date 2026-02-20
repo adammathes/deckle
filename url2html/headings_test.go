@@ -125,7 +125,7 @@ func TestShiftHeadings_CaseInsensitive(t *testing.T) {
 
 func TestNormalizeHeadings_InsertsH1(t *testing.T) {
 	html := `<html><head><title>My Article</title></head><body><h1>Old H1</h1><p>text</p></body></html>`
-	result := normalizeHeadings(html, "")
+	result := normalizeHeadings(html, "", sourceInfo{})
 
 	// Should have H1 with title after <body>
 	if !strings.Contains(result, "<h1>My Article</h1>") {
@@ -145,7 +145,7 @@ func TestNormalizeHeadings_InsertsH1(t *testing.T) {
 
 func TestNormalizeHeadings_TitleOverride(t *testing.T) {
 	html := `<html><head><title>Original Title</title></head><body><p>text</p></body></html>`
-	result := normalizeHeadings(html, "Custom Title")
+	result := normalizeHeadings(html, "Custom Title", sourceInfo{})
 
 	if !strings.Contains(result, "<h1>Custom Title</h1>") {
 		t.Error("expected H1 with override title")
@@ -154,7 +154,7 @@ func TestNormalizeHeadings_TitleOverride(t *testing.T) {
 
 func TestNormalizeHeadings_TitleOverrideCleansSuffix(t *testing.T) {
 	html := `<html><body><p>text</p></body></html>`
-	result := normalizeHeadings(html, "My Article - Site Name")
+	result := normalizeHeadings(html, "My Article - Site Name", sourceInfo{})
 
 	if !strings.Contains(result, "<h1>My Article</h1>") {
 		t.Errorf("expected cleaned title, got: %s", result)
@@ -163,7 +163,7 @@ func TestNormalizeHeadings_TitleOverrideCleansSuffix(t *testing.T) {
 
 func TestNormalizeHeadings_NoBody(t *testing.T) {
 	html := `<h2>Sub</h2><p>text</p>`
-	result := normalizeHeadings(html, "Title")
+	result := normalizeHeadings(html, "Title", sourceInfo{})
 
 	if !strings.HasPrefix(result, "<h1>Title</h1>") {
 		t.Errorf("expected H1 at start when no body tag, got: %q", result[:50])
@@ -172,9 +172,58 @@ func TestNormalizeHeadings_NoBody(t *testing.T) {
 
 func TestNormalizeHeadings_EscapesTitle(t *testing.T) {
 	html := `<html><body><p>text</p></body></html>`
-	result := normalizeHeadings(html, `Title with <script> & "quotes"`)
+	result := normalizeHeadings(html, `Title with <script> & "quotes"`, sourceInfo{})
 
 	if !strings.Contains(result, "Title with &lt;script&gt; &amp; &#34;quotes&#34;") {
 		t.Errorf("expected HTML-escaped title, got: %s", result)
+	}
+}
+
+func TestNormalizeHeadings_Byline(t *testing.T) {
+	html := `<html><body><p>text</p></body></html>`
+	src := sourceInfo{
+		URL:      "https://example.com/article",
+		Byline:   "Jane Doe",
+		SiteName: "Example Blog",
+	}
+	result := normalizeHeadings(html, "Test", src)
+
+	if !strings.Contains(result, `class="byline"`) {
+		t.Error("expected byline paragraph")
+	}
+	if !strings.Contains(result, "Jane Doe") {
+		t.Error("expected author name in byline")
+	}
+	if !strings.Contains(result, "Example Blog") {
+		t.Error("expected site name in byline")
+	}
+	if !strings.Contains(result, "example.com/article") {
+		t.Error("expected URL in byline")
+	}
+	// Byline should appear after H1
+	h1Pos := strings.Index(result, "<h1>")
+	bylinePos := strings.Index(result, `class="byline"`)
+	if bylinePos < h1Pos {
+		t.Error("byline should appear after H1")
+	}
+}
+
+func TestNormalizeHeadings_BylineURLOnly(t *testing.T) {
+	html := `<html><body><p>text</p></body></html>`
+	src := sourceInfo{URL: "https://medium.com/@someone/my-post-abc123"}
+	result := normalizeHeadings(html, "Test", src)
+
+	if !strings.Contains(result, "medium.com/@someone/my-post-abc123") {
+		t.Error("expected clean URL without scheme")
+	}
+	if strings.Contains(result, "https://medium.com") && !strings.Contains(result, `href="https://`) {
+		t.Error("display URL should not have scheme prefix")
+	}
+}
+
+func TestFormatByline_Empty(t *testing.T) {
+	result := formatByline(sourceInfo{})
+	if result != "" {
+		t.Errorf("expected empty string for empty sourceInfo, got %q", result)
 	}
 }

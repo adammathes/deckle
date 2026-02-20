@@ -26,19 +26,25 @@ func processURL(rawURL string, opts optimizeOpts, timeout time.Duration, userAge
 
 	htmlBytes = promoteLazySrc(htmlBytes)
 
-	content, title, err := extractArticle(htmlBytes, pageURL)
+	content, meta, err := extractArticle(htmlBytes, pageURL)
 	if err != nil {
 		return "", "", err
 	}
-	fmt.Fprintf(os.Stderr, "Title: %s\n", title)
+	fmt.Fprintf(os.Stderr, "Title: %s\n", meta.Title)
 
 	result := processArticleImages([]byte(content), opts)
 
-	finalTitle := title
+	finalTitle := meta.Title
 	if titleOverride != "" {
 		finalTitle = titleOverride
 	}
-	final := normalizeHeadings(string(result), finalTitle)
+
+	src := sourceInfo{
+		URL:      rawURL,
+		Byline:   meta.Byline,
+		SiteName: meta.SiteName,
+	}
+	final := normalizeHeadings(string(result), finalTitle, src)
 
 	return final, finalTitle, nil
 }

@@ -270,7 +270,9 @@ func buildEpub(articles []string, title string, outputPath string) error {
 	css := `body { margin: 1em; line-height: 1.5; }
 img { max-width: 100%; height: auto; }
 pre, code { font-size: 0.85em; }
-blockquote { margin-left: 1em; padding-left: 0.5em; border-left: 2px solid #999; }`
+blockquote { margin-left: 1em; padding-left: 0.5em; border-left: 2px solid #999; }
+.byline { font-size: 0.85em; color: #666; margin-top: -0.5em; margin-bottom: 1.5em; }
+.byline a { color: #666; }`
 	cssDataURI := "data:text/css;base64," + base64.StdEncoding.EncodeToString([]byte(css))
 	cssPath, err := e.AddCSS(cssDataURI, "styles.css")
 	if err != nil {

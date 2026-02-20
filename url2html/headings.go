@@ -65,10 +65,53 @@ func shiftHeadings(text string) string {
 	})
 }
 
+// sourceInfo holds attribution info for an article.
+type sourceInfo struct {
+	URL      string // Original article URL
+	Byline   string // Author name from metadata
+	SiteName string // Site/publication name from metadata
+}
+
+// formatByline builds a byline HTML paragraph from the source info.
+// Returns empty string if there's nothing to show.
+func formatByline(src sourceInfo) string {
+	var parts []string
+
+	if src.Byline != "" {
+		parts = append(parts, html.EscapeString(src.Byline))
+	}
+	if src.SiteName != "" {
+		parts = append(parts, html.EscapeString(src.SiteName))
+	}
+
+	byline := strings.Join(parts, " · ")
+
+	if src.URL != "" {
+		// Show a clean version of the URL (strip scheme)
+		displayURL := src.URL
+		for _, prefix := range []string{"https://", "http://"} {
+			displayURL = strings.TrimPrefix(displayURL, prefix)
+		}
+		displayURL = strings.TrimSuffix(displayURL, "/")
+		link := fmt.Sprintf(`<a href="%s">%s</a>`,
+			html.EscapeString(src.URL), html.EscapeString(displayURL))
+		if byline != "" {
+			byline += "<br/>" + link
+		} else {
+			byline = link
+		}
+	}
+
+	if byline == "" {
+		return ""
+	}
+	return fmt.Sprintf(`<p class="byline">%s</p>`, byline)
+}
+
 // normalizeHeadings shifts all headings down one level and inserts an H1
-// with the article title. If titleOverride is non-empty, it is used instead
-// of extracting the title from the HTML.
-func normalizeHeadings(text string, titleOverride string) string {
+// with the article title and optional byline. If titleOverride is non-empty,
+// it is used instead of extracting the title from the HTML.
+func normalizeHeadings(text string, titleOverride string, src sourceInfo) string {
 	title := titleOverride
 	if title != "" {
 		title = cleanTitle(title)
@@ -79,13 +122,18 @@ func normalizeHeadings(text string, titleOverride string) string {
 	// Shift all existing headings down one level
 	text = shiftHeadings(text)
 
-	// Insert H1 title right after <body> (or at start if no body tag)
-	titleHTML := fmt.Sprintf("<h1>%s</h1>\n", html.EscapeString(title))
+	// Build the header block: H1 title + optional byline
+	header := fmt.Sprintf("<h1>%s</h1>\n", html.EscapeString(title))
+	if byline := formatByline(src); byline != "" {
+		header += byline + "\n"
+	}
+
+	// Insert right after <body> (or at start if no body tag)
 	if loc := bodyTagRe.FindStringIndex(text); loc != nil {
 		pos := loc[1]
-		text = text[:pos] + "\n" + titleHTML + text[pos:]
+		text = text[:pos] + "\n" + header + text[pos:]
 	} else {
-		text = titleHTML + text
+		text = header + text
 	}
 
 	return text

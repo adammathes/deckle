@@ -59,15 +59,15 @@ func TestFullPipeline(t *testing.T) {
 	htmlBytes = promoteLazySrc(htmlBytes)
 
 	// Step 3: Extract article
-	content, title, err := extractArticle(htmlBytes, pageURL)
+	content, meta, err := extractArticle(htmlBytes, pageURL)
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	// Readability may return the full title including site suffix;
 	// normalizeHeadings handles cleaning via cleanTitle.
-	if !strings.Contains(title, "Test Article") {
-		t.Errorf("title = %q, expected to contain %q", title, "Test Article")
+	if !strings.Contains(meta.Title, "Test Article") {
+		t.Errorf("title = %q, expected to contain %q", meta.Title, "Test Article")
 	}
 
 	// Step 4: Process images
@@ -75,7 +75,7 @@ func TestFullPipeline(t *testing.T) {
 	result := processArticleImages([]byte(content), opts)
 
 	// Step 5: Normalize headings
-	final := normalizeHeadings(string(result), title)
+	final := normalizeHeadings(string(result), meta.Title, sourceInfo{})
 
 	// Verify: H1 title is present
 	if !strings.Contains(final, "<h1>Test Article</h1>") {
@@ -140,13 +140,13 @@ func TestPipeline_Medium(t *testing.T) {
 	htmlBytes = promoteLazySrc(htmlBytes)
 
 	// Extract article
-	content, title, err := extractArticle(htmlBytes, pageURL)
+	content, meta, err := extractArticle(htmlBytes, pageURL)
 	if err != nil {
 		t.Fatalf("readability failed: %v", err)
 	}
 
-	if !strings.Contains(title, "Gas Town") {
-		t.Errorf("title = %q, expected to contain 'Gas Town'", title)
+	if !strings.Contains(meta.Title, "Gas Town") {
+		t.Errorf("title = %q, expected to contain 'Gas Town'", meta.Title)
 	}
 	if len(content) < 1000 {
 		t.Errorf("article content suspiciously small (%d chars)", len(content))
@@ -157,7 +157,7 @@ func TestPipeline_Medium(t *testing.T) {
 	result := processArticleImages([]byte(content), opts)
 
 	// Normalize headings
-	final := normalizeHeadings(string(result), title)
+	final := normalizeHeadings(string(result), meta.Title, sourceInfo{URL: rawURL, Byline: meta.Byline, SiteName: meta.SiteName})
 
 	// Verify structure
 	if !strings.Contains(final, "<h1>") {
@@ -193,18 +193,18 @@ func TestPipeline_DanShapiro(t *testing.T) {
 
 	htmlBytes = promoteLazySrc(htmlBytes)
 
-	content, title, err := extractArticle(htmlBytes, pageURL)
+	content, meta, err := extractArticle(htmlBytes, pageURL)
 	if err != nil {
 		t.Fatalf("readability failed: %v", err)
 	}
 
-	if !strings.Contains(title, "Five Levels") {
-		t.Errorf("title = %q, expected to contain 'Five Levels'", title)
+	if !strings.Contains(meta.Title, "Five Levels") {
+		t.Errorf("title = %q, expected to contain 'Five Levels'", meta.Title)
 	}
 
 	opts := optimizeOpts{maxWidth: 800, quality: 60, grayscale: true}
 	result := processArticleImages([]byte(content), opts)
-	final := normalizeHeadings(string(result), title)
+	final := normalizeHeadings(string(result), meta.Title, sourceInfo{URL: rawURL, Byline: meta.Byline, SiteName: meta.SiteName})
 
 	// This article should have images (they were lazy-loaded + external)
 	if !strings.Contains(final, "data:image/jpeg;base64,") {
