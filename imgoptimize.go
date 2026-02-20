@@ -18,6 +18,7 @@ import (
 	"os"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 
 	_ "golang.org/x/image/webp"
@@ -241,6 +242,49 @@ func promoteLazySrc(html []byte) []byte {
 
 // fetchAndEmbed downloads external image URLs and embeds them as data URIs.
 func fetchAndEmbed(html []byte) []byte {
+	// Find all image URLs first
+	matches := extImgRe.FindAllSubmatch(html, -1)
+	if len(matches) == 0 {
+		return html
+	}
+
+	// Deduplicate URLs to avoid redundant fetches
+	uniqueURLs := make(map[string]struct{})
+	for _, m := range matches {
+		if len(m) > 2 {
+			uniqueURLs[string(m[2])] = struct{}{}
+		}
+	}
+
+	type result struct {
+		data []byte
+		mime string
+		err  error
+	}
+
+	results := make(map[string]result)
+	var mu sync.Mutex
+	var wg sync.WaitGroup
+
+	// Bounded concurrency
+	sem := make(chan struct{}, 5)
+
+	for u := range uniqueURLs {
+		wg.Add(1)
+		go func(url string) {
+			defer wg.Done()
+			sem <- struct{}{}        // Acquire
+			defer func() { <-sem }() // Release
+
+			data, mime, err := fetchImage(url)
+			mu.Lock()
+			results[url] = result{data, mime, err}
+			mu.Unlock()
+		}(u)
+	}
+
+	wg.Wait()
+
 	var fetched int
 	html = extImgRe.ReplaceAllFunc(html, func(match []byte) []byte {
 		parts := extImgRe.FindSubmatch(match)
@@ -251,43 +295,22 @@ func fetchAndEmbed(html []byte) []byte {
 		url := string(parts[2])
 		suffix := parts[3]
 
-		resp, err := getImageClient().Get(url)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "Warning: could not fetch %s: %v\n", url, err)
-			return match
-		}
-		defer resp.Body.Close()
-		if resp.StatusCode != 200 {
-			fmt.Fprintf(os.Stderr, "Warning: HTTP %d for %s\n", resp.StatusCode, url)
-			return match
-		}
-
-		data, err := io.ReadAll(resp.Body)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "Warning: could not read %s: %v\n", url, err)
-			return match
-		}
-
-		// Detect MIME from Content-Type header or sniff
-		mime := resp.Header.Get("Content-Type")
-		if i := strings.Index(mime, ";"); i >= 0 {
-			mime = mime[:i]
-		}
-		mime = strings.TrimSpace(mime)
-		if mime == "" || mime == "application/octet-stream" {
-			mime = http.DetectContentType(data)
-			if i := strings.Index(mime, ";"); i >= 0 {
-				mime = mime[:i]
+		res, ok := results[url]
+		if !ok || res.err != nil {
+			// Log the error if it occurred during fetch
+			if res.err != nil {
+				fmt.Fprintf(os.Stderr, "Warning: could not fetch %s: %v\n", url, res.err)
 			}
+			return match
 		}
 
-		encoded := base64.StdEncoding.EncodeToString(data)
+		encoded := base64.StdEncoding.EncodeToString(res.data)
 		fetched++
 
 		var out bytes.Buffer
 		out.Write(prefix)
 		out.WriteString("data:")
-		out.WriteString(mime)
+		out.WriteString(res.mime)
 		out.WriteString(";base64,")
 		out.WriteString(encoded)
 		out.Write(suffix)
