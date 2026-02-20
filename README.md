@@ -16,12 +16,9 @@ https://example.com/interesting-article
 https://medium.com/@someone/another-great-post
 EOF
 
-# Convert to epub
-source urls2epub.fish
-urls2epub reading-list.txt reading-list.epub
+# Convert to epub (no other dependencies needed)
+url2html -epub -grayscale -o reading-list.epub reading-list.txt
 ```
-
-You'll also need [pandoc](https://pandoc.org/installing.html) and [fish](https://fishshell.com/) installed.
 
 ## How it works
 
@@ -31,8 +28,22 @@ Each URL goes through a single Go binary (`url2html`) that:
 2. **Extracts** the article using Mozilla's Readability algorithm — strips nav, footers, ads, sidebars
 3. **Optimizes images** — fetches external images, collapses `<picture>` elements, resizes for e-ink (800px wide, grayscale JPEG)
 4. **Normalizes headings** — extracts the title, gives each article a clean H1 for epub chapter breaks
+5. **Packages** into an epub3 with table of contents
 
-Then `pandoc` combines all articles into an epub3 with a table of contents.
+## Epub mode
+
+Build an epub from a list of URLs:
+
+```bash
+url2html -epub -grayscale -o output.epub urls.txt
+url2html -epub -o output.epub https://example.com/article1 https://example.com/article2
+```
+
+You can also mix URL files and individual URLs:
+
+```bash
+url2html -epub -o output.epub urls.txt https://example.com/bonus-article
+```
 
 ## Single article mode
 
@@ -40,23 +51,37 @@ Process a single URL without building an epub:
 
 ```bash
 url2html https://example.com/article > article.html
-url2html --grayscale -o article.html https://example.com/article
+url2html -grayscale -o article.html https://example.com/article
 ```
 
 ### Options
 
 ```
 url2html [options] <URL>
-  --max-width INT     Max image pixel width (default: 800)
-  --quality INT       JPEG quality 1-95 (default: 60)
-  --grayscale         Convert images to grayscale
-  --title STRING      Override article title
-  -o FILE             Output file (default: stdout)
-  --timeout DURATION  HTTP fetch timeout (default: 30s)
+url2html [options] -epub -o out.epub <URL|file.txt> [...]
+
+  -max-width INT     Max image pixel width (default: 800)
+  -quality INT       JPEG quality 1-95 (default: 60)
+  -grayscale         Convert images to grayscale
+  -title STRING      Override article/book title
+  -o FILE            Output file (default: stdout)
+  -timeout DURATION  HTTP fetch timeout (default: 30s)
+  -epub              Generate epub (requires -o)
 ```
+
+## Alternative: pandoc pipeline
+
+If you prefer using pandoc, the fish script still works:
+
+```bash
+source urls2epub.fish
+urls2epub reading-list.txt reading-list.epub
+```
+
+This requires [pandoc](https://pandoc.org/installing.html) and [fish](https://fishshell.com/).
 
 ## Files
 
-- `urls2epub.fish` — batch pipeline: loops URLs, calls url2html, then pandoc
 - `url2html/` — Go binary that does the heavy lifting
+- `urls2epub.fish` — alternative batch pipeline using pandoc
 - `darksoftware/urls.txt` — example URL list
