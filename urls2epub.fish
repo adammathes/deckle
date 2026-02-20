@@ -1,4 +1,4 @@
-function urls2epub -d "Convert a list of URLs into an epub via monolith + html-img-optimize + go-readability + pandoc"
+function urls2epub -d "Convert a list of URLs into an epub via url2html + pandoc"
     if test (count $argv) -ne 2
         echo "Usage: urls2epub urls.txt output.epub"
         return 1
@@ -7,7 +7,6 @@ function urls2epub -d "Convert a list of URLs into an epub via monolith + html-i
     set -l urlfile $argv[1]
     set -l output $argv[2]
     set -l tmpdir (mktemp -d /tmp/urls2epub-XXXXXX)
-    set -l scriptdir (status dirname)
     set -l idx 0
 
     if not test -f $urlfile
@@ -15,82 +14,41 @@ function urls2epub -d "Convert a list of URLs into an epub via monolith + html-i
         return 1
     end
 
-    for cmd in monolith html-img-optimize go-readability pandoc python3
+    for cmd in url2html pandoc
         if not command -q $cmd
-            echo "Error: $cmd not found"
+            echo "Error: $cmd not found on PATH"
             return 1
         end
     end
 
-    if not test -f $scriptdir/html-normalize-headings.py
-        echo "Error: html-normalize-headings.py not found next to this script"
-        return 1
-    end
-
-    # Phase 1: fetch each URL, optimize images, extract article, normalize headings
+    # Phase 1: fetch each URL and produce clean HTML
     set -l htmlfiles
     for url in (grep -v '^\s*#' $urlfile | grep -v '^\s*$' | string trim)
         set idx (math $idx + 1)
         set -l prefix (printf "%03d" $idx)
-        set -l rawfile $tmpdir/$prefix.raw.html
-        set -l optfile $tmpdir/$prefix.opt.html
-        set -l artfile $tmpdir/$prefix.art.html
         set -l htmlfile $tmpdir/$prefix.html
 
-        echo "[$idx] fetch: $url"
-        if not monolith $url -j -F -f -o $rawfile 2>/dev/null
-            echo "     ⚠ monolith failed, skipping"
+        echo "[$idx] $url"
+        if not url2html --grayscale -o $htmlfile $url 2>&1 | while read line
+                echo "     $line"
+            end
+            echo "     ⚠ failed, skipping"
+            rm -f $htmlfile
             continue
         end
 
-        set -l raw_bytes (wc -c < $rawfile | string trim)
-        echo "     "(math $raw_bytes / 1048576)" MB raw"
-
-        # Optimize images: resize to 800px wide, grayscale, quality 60
-        echo "     optimizing images..."
-        if not html-img-optimize --max-width 800 --quality 60 --grayscale -o $optfile $rawfile
-            echo "     ⚠ html-img-optimize failed, using raw html"
-            set optfile $rawfile
-        end
-
-        # Remove raw HTML now that optimized version exists
-        if test "$optfile" != "$rawfile"
-            rm -f $rawfile
-        end
-
-        set -l opt_bytes (wc -c < $optfile | string trim)
-
-        # Guard: skip files that are still too large
-        if test $opt_bytes -gt 31457280
-            echo "     ⚠ still "(math $opt_bytes / 1048576)" MB after optimization, too large — skipping"
-            rm -f $optfile
+        if not test -f $htmlfile
+            echo "     ⚠ no output, skipping"
             continue
         end
 
-        # Extract article content (strips nav, footer, ads; keeps images)
-        echo "     extracting article..."
-        set -l art_title (go-readability -m $optfile 2>/dev/null | python3 -c "import sys,json; print(json.load(sys.stdin).get('title',''))" 2>/dev/null)
-        if not go-readability -f $optfile > $artfile 2>/dev/null
-            echo "     ⚠ readability extraction failed, using optimized html"
-            set artfile $optfile
-        end
+        set -l html_bytes (wc -c < $htmlfile | string trim)
 
-        rm -f $optfile
-
-        set -l art_bytes (wc -c < $artfile | string trim)
-        echo "     "(math $art_bytes / 1024)" KB article"
-
-        # Normalize headings: extract title as H1, shift others down
-        set -l title_flag
-        if test -n "$art_title"
-            set title_flag --title "$art_title"
-            echo "     title: $art_title"
-        end
-        if not python3 $scriptdir/html-normalize-headings.py $artfile -o $htmlfile $title_flag
-            echo "     ⚠ heading normalization failed, using as-is"
-            set htmlfile $artfile
-        else
-            rm -f $artfile
+        # Guard: skip files that are still too large for pandoc
+        if test $html_bytes -gt 31457280
+            echo "     ⚠ "(math $html_bytes / 1048576)" MB — too large, skipping"
+            rm -f $htmlfile
+            continue
         end
 
         set -a htmlfiles $htmlfile
