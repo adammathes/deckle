@@ -1,4 +1,4 @@
-module url2html
+module rebind
 
 go 1.24.4
 

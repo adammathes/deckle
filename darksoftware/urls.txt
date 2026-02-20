@@ -1,8 +1,0 @@
-https://sourcegraph.com/blog/revenge-of-the-junior-developer
-https://steve-yegge.medium.com/welcome-to-gas-town-4f25ee16dd04
-https://steve-yegge.medium.com/the-future-of-coding-agents-e9451a84207c
-https://www.danshapiro.com/blog/2026/01/the-five-levels-from-spicy-autocomplete-to-the-software-factory/
-https://simonwillison.net/2026/Feb/7/software-factory/
-https://maggieappleton.com/gastown/
-https://www.dolthub.com/blog/2026-01-15-a-day-in-gas-town/
-https://law.stanford.edu/2026/02/08/built-by-agents-tested-by-agents-trusted-by-whom/

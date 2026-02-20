@@ -1,10 +1,10 @@
-// url2html: Fetch URLs and produce clean HTML or epub for e-readers.
+// rebind: Fetch URLs and produce clean HTML or epub for e-readers.
 //
 // Single article mode:
-//   url2html [options] <URL>
+//   rebind [options] <URL>
 //
 // Epub mode (multiple articles):
-//   url2html [options] -epub -o output.epub <URL|file> [<URL|file>...]
+//   rebind [options] -epub -o output.epub <URL|file> [<URL|file>...]
 package main
 
 import (
@@ -79,8 +79,8 @@ func main() {
 	userAgent := flag.String("user-agent", defaultUA, "HTTP User-Agent header")
 	epubMode := flag.Bool("epub", false, "Generate epub (requires -o, accepts multiple URLs or a .txt file)")
 	flag.Usage = func() {
-		fmt.Fprintf(os.Stderr, "Usage: url2html [options] <URL>\n")
-		fmt.Fprintf(os.Stderr, "       url2html [options] -epub -o out.epub <URL|file.txt> [...]\n\n")
+		fmt.Fprintf(os.Stderr, "Usage: rebind [options] <URL>\n")
+		fmt.Fprintf(os.Stderr, "       rebind [options] -epub -o out.epub <URL|file.txt> [...]\n\n")
 		fmt.Fprintf(os.Stderr, "Fetch URLs and produce clean HTML or epub for e-readers.\n\n")
 		flag.PrintDefaults()
 	}
