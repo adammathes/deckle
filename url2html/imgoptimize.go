@@ -194,6 +194,16 @@ var (
 	// Matches data-src or data-srcset on img tags (lazy loading)
 	lazySrcRe    = regexp.MustCompile(`(<img\b[^>]*?)\bdata-src=`)
 	lazySrcsetRe = regexp.MustCompile(`(<img\b[^>]*?)\bdata-srcset=`)
+	// Matches srcset attributes with external URLs (invalid in epub)
+	extSrcsetAttrRe = regexp.MustCompile(`\s+srcset\s*=\s*"[^"]*https?://[^"]*"`)
+	// Matches <img> tags with AVIF data URIs (not renderable by e-readers)
+	avifImgRe = regexp.MustCompile(`<img\b[^>]*\bsrc\s*=\s*"data:image/avif;base64,[^"]*"[^>]*/?>`)
+	// Matches data-* attributes (with or without value) — useless in epub,
+	// and pandoc strips ="" from boolean attrs making them invalid XML.
+	dataAttrRe = regexp.MustCompile(`\s+data-[a-zA-Z0-9_-]+(="[^"]*")?`)
+	// Matches inline <svg>...</svg> elements (pandoc lowercases camelCase
+	// SVG element/attribute names, making the SVG invalid in epub).
+	inlineSVGRe = regexp.MustCompile(`(?s)<svg\b[^>]*>.*?</svg>`)
 )
 
 // Matches <img ... src="https://..."> (external URL images)
@@ -490,6 +500,33 @@ func processArticleImages(html []byte, opts optimizeOpts) []byte {
 	} else {
 		fmt.Fprintln(os.Stderr, "No optimizable images found.")
 	}
+
+	// Cleanup for epub validity
+	html = cleanForEpub(html)
+
+	return html
+}
+
+// cleanForEpub removes or fixes HTML elements that cause epub validation errors:
+// - Strips <img> tags with AVIF data URIs (e-readers can't display them)
+// - Removes srcset attributes with external URLs (RSC-006: remote resources not allowed)
+// - Removes boolean data-* attributes in SVGs (invalid XML)
+func cleanForEpub(html []byte) []byte {
+	// Remove AVIF images (not renderable, cause MED-003 errors)
+	html = avifImgRe.ReplaceAll(html, nil)
+
+	// Strip srcset attributes containing external URLs
+	html = extSrcsetAttrRe.ReplaceAll(html, nil)
+
+	// Strip all data-* attributes (framework noise like data-astro-cid-*).
+	// Pandoc strips ="" from boolean attrs when extracting SVGs, making them
+	// invalid XML. Easiest fix: remove all data-* attrs since they're useless in epub.
+	html = dataAttrRe.ReplaceAll(html, nil)
+
+	// Remove inline <svg> elements. Pandoc's HTML parser lowercases camelCase
+	// SVG names (viewBox→viewbox, feGaussianBlur→fegaussianblur), producing
+	// invalid SVGs. Inline SVGs are typically decorative; article images use <img>.
+	html = inlineSVGRe.ReplaceAll(html, nil)
 
 	return html
 }
