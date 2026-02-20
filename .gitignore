@@ -1,0 +1,8 @@
+# Binaries
+html-img-optimize/html-img-optimize
+
+# OS
+.DS_Store
+
+# Build output
+*.epub
