@@ -1,29 +1,171 @@
 package main
 
 import (
+	"context"
+	"crypto/tls"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
+	"sync"
 	"time"
+
+	utls "github.com/refraction-networking/utls"
+	"golang.org/x/net/http2"
 )
 
-const defaultUA = "Mozilla/5.0 (compatible; url2html/1.0; +https://github.com/anthropics/url2html)"
+const defaultUA = "Mozilla/5.0 (X11; Linux x86_64; rv:133.0) Gecko/20100101 Firefox/133.0"
+
+// utlsConn wraps a utls.UConn and satisfies net.Conn + the
+// ConnectionState interface that net/http2 needs.
+type utlsConn struct {
+	*utls.UConn
+}
+
+func (c *utlsConn) ConnectionState() tls.ConnectionState {
+	cs := c.UConn.ConnectionState()
+	return tls.ConnectionState{
+		Version:                     cs.Version,
+		HandshakeComplete:           cs.HandshakeComplete,
+		CipherSuite:                 cs.CipherSuite,
+		NegotiatedProtocol:          cs.NegotiatedProtocol,
+		NegotiatedProtocolIsMutual:  cs.NegotiatedProtocolIsMutual,
+		ServerName:                  cs.ServerName,
+		PeerCertificates:            cs.PeerCertificates,
+		VerifiedChains:              cs.VerifiedChains,
+		OCSPResponse:                cs.OCSPResponse,
+		TLSUnique:                   cs.TLSUnique,
+	}
+}
+
+// newBrowserClient creates an HTTP client that mimics a real browser's
+// TLS fingerprint using utls. Supports both HTTP/1.1 and HTTP/2.
+func newBrowserClient(timeout time.Duration) *http.Client {
+	dialer := &net.Dialer{Timeout: timeout}
+
+	// HTTP/2 transport for h2 connections
+	h2Transport := &http2.Transport{}
+
+	// HTTP/1.1 transport with utls dialer
+	h1Transport := &http.Transport{
+		DialContext: dialer.DialContext,
+	}
+
+	// Custom round tripper that dials with utls and routes to h1 or h2
+	// based on ALPN negotiation.
+	rt := &browserTransport{
+		dialer:      dialer,
+		h1:          h1Transport,
+		h2:          h2Transport,
+		timeout:     timeout,
+	}
+
+	return &http.Client{
+		Timeout:   timeout,
+		Transport: rt,
+	}
+}
+
+type browserTransport struct {
+	dialer  *net.Dialer
+	h1      *http.Transport
+	h2      *http2.Transport
+	timeout time.Duration
+	mu      sync.Mutex
+	// Cache TLS connections per host to allow connection reuse
+	conns   map[string]net.Conn
+}
+
+func (bt *browserTransport) dialUTLS(ctx context.Context, network, addr string) (net.Conn, string, error) {
+	conn, err := bt.dialer.DialContext(ctx, network, addr)
+	if err != nil {
+		return nil, "", err
+	}
+
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		host = addr
+	}
+
+	tlsConn := utls.UClient(conn, &utls.Config{
+		ServerName: host,
+	}, utls.HelloFirefox_120)
+
+	if err := tlsConn.HandshakeContext(ctx); err != nil {
+		conn.Close()
+		return nil, "", err
+	}
+
+	alpn := tlsConn.ConnectionState().NegotiatedProtocol
+	return &utlsConn{tlsConn}, alpn, nil
+}
+
+func (bt *browserTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	if req.URL.Scheme != "https" {
+		return bt.h1.RoundTrip(req)
+	}
+
+	addr := req.URL.Host
+	if !hasPort(addr) {
+		addr = addr + ":443"
+	}
+
+	conn, alpn, err := bt.dialUTLS(req.Context(), "tcp", addr)
+	if err != nil {
+		return nil, err
+	}
+
+	if alpn == "h2" {
+		// For HTTP/2, use http2.ClientConn directly
+		h2conn, err := bt.h2.NewClientConn(conn)
+		if err != nil {
+			conn.Close()
+			return nil, err
+		}
+		return h2conn.RoundTrip(req)
+	}
+
+	// For HTTP/1.1, inject the TLS conn into a one-shot transport
+	transport := &http.Transport{
+		DialTLSContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+			return conn, nil
+		},
+	}
+	return transport.RoundTrip(req)
+}
+
+func hasPort(host string) bool {
+	_, _, err := net.SplitHostPort(host)
+	return err == nil
+}
 
 // fetchHTML downloads a URL and returns the HTML body, parsed URL, and any error.
+// Uses browser-like TLS fingerprint and headers to avoid bot detection.
 func fetchHTML(rawURL string, timeout time.Duration, userAgent string) ([]byte, *url.URL, error) {
 	parsed, err := url.Parse(rawURL)
 	if err != nil {
 		return nil, nil, fmt.Errorf("invalid URL %q: %w", rawURL, err)
 	}
 
-	client := &http.Client{Timeout: timeout}
+	var client *http.Client
+	if parsed.Scheme == "https" {
+		client = newBrowserClient(timeout)
+	} else {
+		client = &http.Client{Timeout: timeout}
+	}
+
 	req, err := http.NewRequest("GET", rawURL, nil)
 	if err != nil {
 		return nil, nil, err
 	}
 	req.Header.Set("User-Agent", userAgent)
+	req.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
+	req.Header.Set("Accept-Language", "en-US,en;q=0.5")
+	req.Header.Set("Sec-Fetch-Dest", "document")
+	req.Header.Set("Sec-Fetch-Mode", "navigate")
+	req.Header.Set("Sec-Fetch-Site", "none")
 
 	resp, err := client.Do(req)
 	if err != nil {
@@ -42,4 +184,22 @@ func fetchHTML(rawURL string, timeout time.Duration, userAgent string) ([]byte, 
 
 	fmt.Fprintf(os.Stderr, "Fetched %s (%s)\n", rawURL, humanSize(int64(len(body))))
 	return body, parsed, nil
+}
+
+// fetchImageClient is used by imgoptimize.go for downloading external images.
+var fetchImageClient *http.Client
+
+func init() {
+	fetchImageClient = newBrowserClient(30 * time.Second)
+}
+
+// ignoreCertClient returns an HTTP client that skips TLS verification.
+// Used only for tests with httptest TLS servers.
+func ignoreCertClient(timeout time.Duration) *http.Client {
+	return &http.Client{
+		Timeout: timeout,
+		Transport: &http.Transport{
+			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+		},
+	}
 }

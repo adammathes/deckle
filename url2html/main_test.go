@@ -5,6 +5,7 @@ import (
 	"image/color"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -117,5 +118,153 @@ func TestFullPipeline(t *testing.T) {
 	}
 	if strings.Contains(final, "Related Posts") {
 		t.Error("sidebar should be stripped by readability")
+	}
+}
+
+// TestPipeline_Medium runs the full pipeline against a live Medium article.
+// Skip in short mode since it requires network access.
+func TestPipeline_Medium(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping live network test in short mode")
+	}
+
+	rawURL := "https://steve-yegge.medium.com/welcome-to-gas-town-4f25ee16dd04"
+
+	// Fetch
+	htmlBytes, pageURL, err := fetchHTML(rawURL, 30*time.Second, defaultUA)
+	if err != nil {
+		t.Fatalf("fetch failed: %v", err)
+	}
+
+	// Promote lazy src
+	htmlBytes = promoteLazySrc(htmlBytes)
+
+	// Extract article
+	content, title, err := extractArticle(htmlBytes, pageURL)
+	if err != nil {
+		t.Fatalf("readability failed: %v", err)
+	}
+
+	if !strings.Contains(title, "Gas Town") {
+		t.Errorf("title = %q, expected to contain 'Gas Town'", title)
+	}
+	if len(content) < 1000 {
+		t.Errorf("article content suspiciously small (%d chars)", len(content))
+	}
+
+	// Process images
+	opts := optimizeOpts{maxWidth: 800, quality: 60, grayscale: true}
+	result := processArticleImages([]byte(content), opts)
+
+	// Normalize headings
+	final := normalizeHeadings(string(result), title)
+
+	// Verify structure
+	if !strings.Contains(final, "<h1>") {
+		t.Error("expected H1 title in output")
+	}
+	if len(final) < 1000 {
+		t.Errorf("final output suspiciously small (%d chars)", len(final))
+	}
+}
+
+// TestPipeline_DanShapiro runs the full pipeline against a WordPress site
+// with lazy-loaded images. Skip in short mode.
+func TestPipeline_DanShapiro(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping live network test in short mode")
+	}
+
+	rawURL := "https://www.danshapiro.com/blog/2026/01/the-five-levels-from-spicy-autocomplete-to-the-software-factory/"
+
+	htmlBytes, pageURL, err := fetchHTML(rawURL, 30*time.Second, defaultUA)
+	if err != nil {
+		t.Fatalf("fetch failed: %v", err)
+	}
+
+	htmlBytes = promoteLazySrc(htmlBytes)
+
+	content, title, err := extractArticle(htmlBytes, pageURL)
+	if err != nil {
+		t.Fatalf("readability failed: %v", err)
+	}
+
+	if !strings.Contains(title, "Five Levels") {
+		t.Errorf("title = %q, expected to contain 'Five Levels'", title)
+	}
+
+	opts := optimizeOpts{maxWidth: 800, quality: 60, grayscale: true}
+	result := processArticleImages([]byte(content), opts)
+	final := normalizeHeadings(string(result), title)
+
+	// This article should have images (they were lazy-loaded + external)
+	if !strings.Contains(final, "data:image/jpeg;base64,") {
+		t.Error("expected embedded JPEG images (lazy-loaded images should be fetched)")
+	}
+}
+
+// TestPipeline_LazyLoadPromote verifies that data-src attributes are
+// promoted to src before readability strips the page.
+func TestPipeline_LazyLoadPromote(t *testing.T) {
+	pageHTML := `<!DOCTYPE html><html><head><title>Lazy Test</title></head><body>
+		<article>
+			<h1>Lazy Test</h1>
+			<p>This article has lazy-loaded images that use data-src instead of src.
+			The pipeline should promote data-src to src so the images are visible
+			to readability and the image optimizer. Here is enough text to satisfy
+			the readability algorithm's content threshold requirements.</p>
+			<img class="lazyload" data-src="https://example.com/img.jpg" alt="lazy image">
+			<p>More content to ensure readability keeps this section as the main article.</p>
+		</article>
+	</body></html>`
+
+	promoted := promoteLazySrc([]byte(pageHTML))
+	html := string(promoted)
+
+	// data-src should be promoted to src
+	if strings.Contains(html, "data-src=") {
+		t.Error("data-src should have been promoted to src")
+	}
+	if !strings.Contains(html, `src="https://example.com/img.jpg"`) {
+		t.Error("expected src attribute with the original data-src URL")
+	}
+}
+
+// TestPipeline_ReadabilityStripsBoilerplate verifies that readability
+// removes navigation, footer, and sidebar content.
+func TestPipeline_ReadabilityStripsBoilerplate(t *testing.T) {
+	pageHTML := `<!DOCTYPE html><html><head><title>Boilerplate Test</title></head><body>
+		<header><nav><a href="/">Home</a> | <a href="/blog">Blog</a> | <a href="/about">About</a></nav></header>
+		<main>
+			<article>
+				<h1>Boilerplate Test</h1>
+				<p>This is the main article content that should be preserved by readability.
+				It needs to be long enough that readability identifies it as the primary content.
+				More text here to increase the content density and word count.</p>
+				<p>A second paragraph with additional discussion and analysis to further
+				establish this as the main content area of the page. Readability uses
+				text density heuristics so we need substantial text.</p>
+				<p>Third paragraph continuing the article with important information
+				that should definitely be kept in the final output.</p>
+			</article>
+		</main>
+		<aside><h3>Trending</h3><ul><li>Post 1</li><li>Post 2</li></ul></aside>
+		<footer><p>Copyright 2024 | Privacy Policy | Terms of Service</p></footer>
+	</body></html>`
+
+	u, _ := url.Parse("https://example.com/article")
+	content, _, err := extractArticle([]byte(pageHTML), u)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if !strings.Contains(content, "main article content") {
+		t.Error("expected article content to be preserved")
+	}
+	if strings.Contains(content, "Privacy Policy") {
+		t.Error("footer should be stripped")
+	}
+	if strings.Contains(content, "Trending") {
+		t.Error("sidebar should be stripped")
 	}
 }

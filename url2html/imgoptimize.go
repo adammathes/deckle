@@ -197,7 +197,15 @@ var (
 // Matches <img ... src="https://..."> (external URL images)
 var extImgRe = regexp.MustCompile(`(<img\b[^>]*?\bsrc\s*=\s*")(https?://[^"]+)(")`)
 
-var imgHTTPClient = &http.Client{Timeout: 30 * time.Second}
+// getImageClient returns the HTTP client for fetching external images.
+// Uses fetchImageClient (browser TLS fingerprint) if available, otherwise
+// falls back to a plain client (for tests).
+func getImageClient() *http.Client {
+	if fetchImageClient != nil {
+		return fetchImageClient
+	}
+	return &http.Client{Timeout: 30 * time.Second}
+}
 
 // promoteLazySrc rewrites data-src="..." to src="..." on img tags
 // that use lazy loading, so downstream tools see the real image URLs.
@@ -219,7 +227,7 @@ func fetchAndEmbed(html []byte) []byte {
 		url := string(parts[2])
 		suffix := parts[3]
 
-		resp, err := imgHTTPClient.Get(url)
+		resp, err := getImageClient().Get(url)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Warning: could not fetch %s: %v\n", url, err)
 			return match

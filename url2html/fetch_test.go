@@ -15,7 +15,7 @@ func TestFetchHTML_Success(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	body, u, err := fetchHTML(srv.URL, 5*time.Second, "test-agent")
+	body, u, err := fetchHTML(srv.URL, 5*time.Second, defaultUA)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -33,7 +33,7 @@ func TestFetchHTML_NotFound(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	_, _, err := fetchHTML(srv.URL, 5*time.Second, "test-agent")
+	_, _, err := fetchHTML(srv.URL, 5*time.Second, defaultUA)
 	if err == nil {
 		t.Fatal("expected error for 404")
 	}
@@ -56,5 +56,62 @@ func TestFetchHTML_UserAgent(t *testing.T) {
 	}
 	if gotUA != "my-custom-agent/2.0" {
 		t.Errorf("User-Agent = %q, want %q", gotUA, "my-custom-agent/2.0")
+	}
+}
+
+func TestFetchHTML_BrowserHeaders(t *testing.T) {
+	var headers http.Header
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		headers = r.Header
+		w.Write([]byte("ok"))
+	}))
+	defer srv.Close()
+
+	_, _, err := fetchHTML(srv.URL, 5*time.Second, defaultUA)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	required := map[string]string{
+		"Sec-Fetch-Dest": "document",
+		"Sec-Fetch-Mode": "navigate",
+		"Sec-Fetch-Site": "none",
+		"Accept":         "text/html",
+	}
+	for header, wantSubstr := range required {
+		got := headers.Get(header)
+		if got == "" {
+			t.Errorf("missing header %s", header)
+		} else if !strings.Contains(got, wantSubstr) {
+			t.Errorf("%s = %q, want substring %q", header, got, wantSubstr)
+		}
+	}
+}
+
+// TestFetchHTML_Medium verifies that Medium articles can be fetched.
+// This is a live network test — skip in short mode.
+func TestFetchHTML_Medium(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping live network test in short mode")
+	}
+
+	body, _, err := fetchHTML(
+		"https://steve-yegge.medium.com/welcome-to-gas-town-4f25ee16dd04",
+		30*time.Second,
+		defaultUA,
+	)
+	if err != nil {
+		t.Fatalf("Medium fetch failed: %v", err)
+	}
+
+	html := string(body)
+	if strings.Contains(html, "Just a moment") {
+		t.Error("got Cloudflare challenge page instead of article")
+	}
+	if !strings.Contains(html, "Gas Town") {
+		t.Error("expected article content containing 'Gas Town'")
+	}
+	if len(body) < 10000 {
+		t.Errorf("response suspiciously small (%d bytes), expected full article", len(body))
 	}
 }
