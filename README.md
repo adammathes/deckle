@@ -4,12 +4,15 @@ Turn a reading list into a clean epub. Paste some URLs, get a book for your e-re
 
 Fetches each article, strips away everything that isn't content, optimizes images for e-ink displays, and packages the result as an epub with a table of contents.
 
+## Install
+
+```bash
+go install github.com/adammathes/deckle@latest
+```
+
 ## Quick start
 
 ```bash
-# Build (requires Go 1.24+)
-go install ./...
-
 # Create a reading list
 cat > reading-list.txt <<EOF
 https://example.com/interesting-article
