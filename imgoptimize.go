@@ -20,6 +20,7 @@ import (
 	"strings"
 	"time"
 
+	xdraw "golang.org/x/image/draw"
 	_ "golang.org/x/image/webp"
 )
 
@@ -35,59 +36,10 @@ func humanSize(n int64) string {
 	return fmt.Sprintf("%.1f%s", f, units[len(units)-1])
 }
 
-// areaResize downscales an image using area-average resampling.
-func areaResize(src image.Image, dstW, dstH int) *image.NRGBA {
-	srcB := src.Bounds()
-	srcW := srcB.Dx()
-	srcH := srcB.Dy()
+// resize downscales an image using BiLinear resampling.
+func resize(src image.Image, dstW, dstH int) *image.NRGBA {
 	dst := image.NewNRGBA(image.Rect(0, 0, dstW, dstH))
-
-	xRatio := float64(srcW) / float64(dstW)
-	yRatio := float64(srcH) / float64(dstH)
-
-	for dy := 0; dy < dstH; dy++ {
-		sy0 := float64(dy) * yRatio
-		sy1 := float64(dy+1) * yRatio
-		for dx := 0; dx < dstW; dx++ {
-			sx0 := float64(dx) * xRatio
-			sx1 := float64(dx+1) * xRatio
-
-			var rSum, gSum, bSum, aSum, area float64
-			for sy := int(sy0); sy < int(math.Ceil(sy1)); sy++ {
-				if sy >= srcH {
-					break
-				}
-				fy0 := math.Max(float64(sy), sy0)
-				fy1 := math.Min(float64(sy+1), sy1)
-				yCov := fy1 - fy0
-
-				for sx := int(sx0); sx < int(math.Ceil(sx1)); sx++ {
-					if sx >= srcW {
-						break
-					}
-					fx0 := math.Max(float64(sx), sx0)
-					fx1 := math.Min(float64(sx+1), sx1)
-					xCov := fx1 - fx0
-					w := xCov * yCov
-
-					r, g, b, a := src.At(srcB.Min.X+sx, srcB.Min.Y+sy).RGBA()
-					rSum += float64(r) * w
-					gSum += float64(g) * w
-					bSum += float64(b) * w
-					aSum += float64(a) * w
-					area += w
-				}
-			}
-			if area > 0 {
-				dst.SetNRGBA(dx, dy, color.NRGBA{
-					R: uint8(rSum / area / 257),
-					G: uint8(gSum / area / 257),
-					B: uint8(bSum / area / 257),
-					A: uint8(aSum / area / 257),
-				})
-			}
-		}
-	}
+	xdraw.BiLinear.Scale(dst, dst.Bounds(), src, src.Bounds(), xdraw.Over, nil)
 	return dst
 }
 
@@ -161,7 +113,7 @@ func optimizeImage(data []byte, mime string, opts optimizeOpts) (string, int) {
 		if newH < 1 {
 			newH = 1
 		}
-		img = areaResize(img, newW, newH)
+		img = resize(img, newW, newH)
 	}
 
 	var encImg image.Image = img
