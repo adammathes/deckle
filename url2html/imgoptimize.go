@@ -194,6 +194,10 @@ var (
 	// Matches data-src or data-srcset on img tags (lazy loading)
 	lazySrcRe    = regexp.MustCompile(`(<img\b[^>]*?)\bdata-src=`)
 	lazySrcsetRe = regexp.MustCompile(`(<img\b[^>]*?)\bdata-srcset=`)
+	// Matches an entire <img> tag that has data-src (lazy loading)
+	lazyImgRe = regexp.MustCompile(`<img\b[^>]*\bdata-src\s*=[^>]*>`)
+	// Matches src="data:image/svg+xml;base64,..." (placeholder) within an img tag
+	svgSrcAttrRe = regexp.MustCompile(`\bsrc\s*=\s*"data:image/svg\+xml;base64,[^"]*"`)
 	// Matches srcset attributes with external URLs (invalid in epub)
 	extSrcsetAttrRe = regexp.MustCompile(`\s+srcset\s*=\s*"[^"]*https?://[^"]*"`)
 	// Matches <img> tags with AVIF data URIs (not renderable by e-readers)
@@ -221,7 +225,15 @@ func getImageClient() *http.Client {
 
 // promoteLazySrc rewrites data-src="..." to src="..." on img tags
 // that use lazy loading, so downstream tools see the real image URLs.
+// Also removes SVG placeholder src attrs to avoid duplicates.
 func promoteLazySrc(html []byte) []byte {
+	// Remove SVG placeholder src attrs on img tags that also have data-src.
+	// WordPress et al. use src="data:image/svg+xml;base64,..." as a 1x1 pixel
+	// placeholder alongside data-src="real-url". Promoting data-src would create
+	// duplicate src attributes.
+	html = lazyImgRe.ReplaceAllFunc(html, func(match []byte) []byte {
+		return svgSrcAttrRe.ReplaceAll(match, nil)
+	})
 	html = lazySrcRe.ReplaceAll(html, []byte("${1}src="))
 	html = lazySrcsetRe.ReplaceAll(html, []byte("${1}srcset="))
 	return html
