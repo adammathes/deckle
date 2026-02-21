@@ -6,7 +6,6 @@ import (
 	"bytes"
 	"encoding/base64"
 	"fmt"
-	"os"
 	"regexp"
 	"strings"
 
@@ -97,7 +96,7 @@ func extractImages(e *epub.Epub, body string, chapterIdx int) (string, error) {
 			// Try raw encoding (no padding)
 			_, err = base64.RawStdEncoding.DecodeString(b64data)
 			if err != nil {
-				fmt.Fprintf(os.Stderr, "Warning: invalid base64 for %s: %v\n", filename, err)
+				fmt.Fprintf(logOut, "Warning: invalid base64 for %s: %v\n", filename, err)
 				return match
 			}
 		}
@@ -106,7 +105,7 @@ func extractImages(e *epub.Epub, body string, chapterIdx int) (string, error) {
 		dataURI := "data:" + mime + ";base64," + b64data
 		internalPath, err := e.AddImage(dataURI, filename)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "Warning: failed to add image %s: %v\n", filename, err)
+			fmt.Fprintf(logOut, "Warning: failed to add image %s: %v\n", filename, err)
 			lastErr = err
 			return match
 		}
@@ -277,7 +276,7 @@ blockquote { margin-left: 1em; padding-left: 0.5em; border-left: 2px solid #999;
 	cssPath, err := e.AddCSS(cssDataURI, "styles.css")
 	if err != nil {
 		// CSS is optional, continue without it
-		fmt.Fprintf(os.Stderr, "Warning: could not add CSS: %v\n", err)
+		fmt.Fprintf(logOut, "Warning: could not add CSS: %v\n", err)
 		cssPath = ""
 	}
 
@@ -297,7 +296,7 @@ blockquote { margin-left: 1em; padding-left: 0.5em; border-left: 2px solid #999;
 		filename := fmt.Sprintf("article%03d.xhtml", i+1)
 		_, err := e.AddSection(body, chTitle, filename, cssPath)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "Warning: could not add section %q: %v\n", chTitle, err)
+			fmt.Fprintf(logOut, "Warning: could not add section %q: %v\n", chTitle, err)
 			continue
 		}
 	}

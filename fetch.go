@@ -8,7 +8,6 @@ import (
 	"net"
 	"net/http"
 	"net/url"
-	"os"
 	"sync"
 	"time"
 
@@ -187,7 +186,7 @@ func fetchHTML(rawURL string, timeout time.Duration, userAgent string) ([]byte, 
 		return nil, nil, fmt.Errorf("reading response: %w", err)
 	}
 
-	fmt.Fprintf(os.Stderr, "Fetched %s (%s)\n", rawURL, humanSize(int64(len(body))))
+	fmt.Fprintf(logOut, "Fetched %s (%s)\n", rawURL, humanSize(int64(len(body))))
 	return body, parsed, nil
 }
 

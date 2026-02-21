@@ -13,11 +13,16 @@ import (
 	"bufio"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"strings"
 	"sync"
 	"time"
 )
+
+// logOut is the writer for informational/progress output.
+// In silent mode it is set to io.Discard so only errors reach the user.
+var logOut io.Writer = os.Stderr
 
 // processURL fetches a URL and runs the full article pipeline.
 // Returns the final HTML string and the article title.
@@ -33,7 +38,7 @@ func processURL(rawURL string, opts optimizeOpts, timeout time.Duration, userAge
 	if err != nil {
 		return "", "", err
 	}
-	fmt.Fprintf(os.Stderr, "Title: %s\n", meta.Title)
+	fmt.Fprintf(logOut, "Title: %s\n", meta.Title)
 
 	result := processArticleImages([]byte(content), opts)
 
@@ -81,6 +86,7 @@ func main() {
 	timeout := flag.Duration("timeout", 30*time.Second, "HTTP fetch timeout")
 	userAgent := flag.String("user-agent", defaultUA, "HTTP User-Agent header")
 	epubMode := flag.Bool("epub", false, "Generate epub (requires -o, accepts multiple URLs or a .txt file)")
+	silent := flag.Bool("silent", false, "Suppress all output except errors (for pipeline use)")
 	flag.Usage = func() {
 		fmt.Fprintf(os.Stderr, "Usage: deckle [options] <URL>\n")
 		fmt.Fprintf(os.Stderr, "       deckle [options] -epub -o out.epub <URL|file.txt> [...]\n\n")
@@ -88,6 +94,10 @@ func main() {
 		flag.PrintDefaults()
 	}
 	flag.Parse()
+
+	if *silent {
+		logOut = io.Discard
+	}
 
 	opts := optimizeOpts{
 		maxWidth:  *maxWidth,
@@ -139,7 +149,7 @@ func main() {
 				sem <- struct{}{}        // Acquire
 				defer func() { <-sem }() // Release
 
-				fmt.Fprintf(os.Stderr, "[%d/%d] %s\n", i+1, len(urls), rawURL)
+				fmt.Fprintf(logOut, "[%d/%d] %s\n", i+1, len(urls), rawURL)
 				html, _, err := processURL(rawURL, opts, *timeout, *userAgent, "")
 				if err != nil {
 					fmt.Fprintf(os.Stderr, "  Error: %v (skipping)\n", err)
@@ -174,12 +184,12 @@ func main() {
 			}
 		}
 
-		fmt.Fprintf(os.Stderr, "Building epub from %d articles...\n", len(articles))
+		fmt.Fprintf(logOut, "Building epub from %d articles...\n", len(articles))
 		if err := buildEpub(articles, bookTitle, *output); err != nil {
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 			os.Exit(1)
 		}
-		fmt.Fprintf(os.Stderr, "✓ %s (%d articles)\n", *output, len(articles))
+		fmt.Fprintf(logOut, "✓ %s (%d articles)\n", *output, len(articles))
 
 	} else {
 		// Single URL mode
