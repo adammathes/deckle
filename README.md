@@ -77,4 +77,4 @@ I asked AI to give me some reading lists on topics for my ereader and a pipeline
 
 Books: [A deckle edge is a feathered edge on a piece of paper, in contrast to a cut edge ](https://en.wikipedia.org/wiki/Deckle_edge)
 
-Beef: in the conext of corned beerf: the point cut of the brisket, a fattier, more intensely flavored, and marbled portion of the beef brisket
+Beef: in the conext of corned beef: the point cut of the brisket, a fattier, more intensely flavored, and marbled portion of the beef brisket
