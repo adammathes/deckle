@@ -250,7 +250,7 @@ func fetchAndEmbed(html []byte) []byte {
 		if !ok || res.err != nil {
 			// Log the error if it occurred during fetch
 			if res.err != nil {
-				fmt.Fprintf(os.Stderr, "Warning: could not fetch %s: %v\n", url, res.err)
+				fmt.Fprintf(logOut, "Warning: could not fetch %s: %v\n", url, res.err)
 			}
 			return match
 		}
