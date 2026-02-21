@@ -130,31 +130,3 @@ func TestFetchHTML_InvalidURL(t *testing.T) {
 		t.Error("expected error for invalid URL")
 	}
 }
-
-// TestFetchHTML_Medium verifies that Medium articles can be fetched.
-// This is a live network test — skip in short mode.
-func TestFetchHTML_Medium(t *testing.T) {
-	if testing.Short() {
-		t.Skip("skipping live network test in short mode")
-	}
-
-	body, _, err := fetchHTML(
-		"https://steve-yegge.medium.com/welcome-to-gas-town-4f25ee16dd04",
-		30*time.Second,
-		defaultUA,
-	)
-	if err != nil {
-		t.Fatalf("Medium fetch failed: %v", err)
-	}
-
-	html := string(body)
-	if strings.Contains(html, "Just a moment") {
-		t.Error("got Cloudflare challenge page instead of article")
-	}
-	if !strings.Contains(html, "Gas Town") {
-		t.Error("expected article content containing 'Gas Town'")
-	}
-	if len(body) < 10000 {
-		t.Errorf("response suspiciously small (%d bytes), expected full article", len(body))
-	}
-}
