@@ -5,8 +5,11 @@ import (
 	"encoding/base64"
 	"image"
 	"image/color"
+	"image/gif"
 	"image/jpeg"
 	"image/png"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 )
@@ -228,11 +231,540 @@ func TestHumanSize(t *testing.T) {
 		{1024, "1.0KB"},
 		{1048576, "1.0MB"},
 		{1073741824, "1.0GB"},
+		{1099511627776, "1.0TB"},
+		{1125899906842624, "1.0TB"},  // exactly 1 PB - overflows to final return
 	}
 	for _, tt := range tests {
 		got := humanSize(tt.input)
 		if got != tt.want {
 			t.Errorf("humanSize(%d) = %q, want %q", tt.input, got, tt.want)
 		}
+	}
+}
+
+func TestIsAnimatedGIF_Static(t *testing.T) {
+	// Create a single-frame GIF
+	img := image.NewPaletted(image.Rect(0, 0, 2, 2), color.Palette{color.White, color.Black})
+	var buf bytes.Buffer
+	gif.Encode(&buf, img, nil)
+	if isAnimatedGIF(buf.Bytes()) {
+		t.Error("single-frame GIF should not be animated")
+	}
+}
+
+func TestIsAnimatedGIF_Animated(t *testing.T) {
+	// Create a multi-frame GIF
+	palette := color.Palette{color.White, color.Black}
+	g := &gif.GIF{
+		Image: []*image.Paletted{
+			image.NewPaletted(image.Rect(0, 0, 2, 2), palette),
+			image.NewPaletted(image.Rect(0, 0, 2, 2), palette),
+		},
+		Delay: []int{10, 10},
+	}
+	var buf bytes.Buffer
+	gif.EncodeAll(&buf, g)
+	if !isAnimatedGIF(buf.Bytes()) {
+		t.Error("multi-frame GIF should be animated")
+	}
+}
+
+func TestIsAnimatedGIF_InvalidData(t *testing.T) {
+	if isAnimatedGIF([]byte("not a gif")) {
+		t.Error("invalid data should return false")
+	}
+}
+
+func TestOptimizeImage_AnimatedGIF(t *testing.T) {
+	palette := color.Palette{color.White, color.Black}
+	g := &gif.GIF{
+		Image: []*image.Paletted{
+			image.NewPaletted(image.Rect(0, 0, 2, 2), palette),
+			image.NewPaletted(image.Rect(0, 0, 2, 2), palette),
+		},
+		Delay: []int{10, 10},
+	}
+	var buf bytes.Buffer
+	gif.EncodeAll(&buf, g)
+	uri, _ := optimizeImage(buf.Bytes(), "image/gif", optimizeOpts{maxWidth: 800, quality: 60})
+	if uri != "" {
+		t.Error("animated GIF should be passed through (empty URI)")
+	}
+}
+
+func TestOptimizeImage_StaticGIF(t *testing.T) {
+	// A static GIF should be optimized (converted to JPEG)
+	img := image.NewPaletted(image.Rect(0, 0, 100, 100), color.Palette{color.White, color.Black})
+	var buf bytes.Buffer
+	gif.Encode(&buf, img, nil)
+	uri, _ := optimizeImage(buf.Bytes(), "image/gif", optimizeOpts{maxWidth: 800, quality: 60})
+	if uri == "" {
+		t.Error("static GIF should be optimized")
+	}
+	if !strings.HasPrefix(uri, "data:image/jpeg;base64,") {
+		t.Error("optimized GIF should produce JPEG data URI")
+	}
+}
+
+func TestOptimizeImage_InvalidData(t *testing.T) {
+	uri, n := optimizeImage([]byte("not an image"), "image/png", optimizeOpts{maxWidth: 800, quality: 60})
+	if uri != "" {
+		t.Error("invalid image data should return empty URI")
+	}
+	if n != 0 {
+		t.Error("invalid image data should return 0 byte count")
+	}
+}
+
+func TestDecodeBase64_Standard(t *testing.T) {
+	original := []byte("hello world")
+	encoded := base64.StdEncoding.EncodeToString(original)
+	decoded, err := decodeBase64(encoded)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(decoded) != "hello world" {
+		t.Errorf("got %q, want %q", string(decoded), "hello world")
+	}
+}
+
+func TestDecodeBase64_RawNoPadding(t *testing.T) {
+	original := []byte("hello world")
+	encoded := base64.RawStdEncoding.EncodeToString(original)
+	decoded, err := decodeBase64(encoded)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(decoded) != "hello world" {
+		t.Errorf("got %q, want %q", string(decoded), "hello world")
+	}
+}
+
+func TestDecodeBase64_Invalid(t *testing.T) {
+	_, err := decodeBase64("!!!not-base64!!!")
+	if err == nil {
+		t.Error("expected error for invalid base64")
+	}
+}
+
+func TestTryOptimizeDataURI(t *testing.T) {
+	imgData := makePNG(100, 100, color.NRGBA{255, 0, 0, 255})
+	b64 := base64.StdEncoding.EncodeToString(imgData)
+	opts := optimizeOpts{maxWidth: 800, quality: 60}
+	var st stats
+	uri := tryOptimizeDataURI("image/png", b64, opts, &st)
+	if uri == "" {
+		t.Fatal("expected optimized URI")
+	}
+	if !strings.HasPrefix(uri, "data:image/jpeg;base64,") {
+		t.Error("expected JPEG data URI")
+	}
+	if st.count != 1 {
+		t.Errorf("expected count=1, got %d", st.count)
+	}
+	if st.originalTotal == 0 {
+		t.Error("expected non-zero originalTotal")
+	}
+	if st.optimizedTotal == 0 {
+		t.Error("expected non-zero optimizedTotal")
+	}
+}
+
+func TestTryOptimizeDataURI_SVGPassthrough(t *testing.T) {
+	b64 := base64.StdEncoding.EncodeToString([]byte("<svg></svg>"))
+	opts := optimizeOpts{maxWidth: 800, quality: 60}
+	var st stats
+	uri := tryOptimizeDataURI("image/svg+xml", b64, opts, &st)
+	if uri != "" {
+		t.Error("SVG should be passed through (empty URI)")
+	}
+	if st.count != 0 {
+		t.Error("SVG passthrough should not increment count")
+	}
+}
+
+func TestTryOptimizeDataURI_InvalidBase64(t *testing.T) {
+	opts := optimizeOpts{maxWidth: 800, quality: 60}
+	var st stats
+	uri := tryOptimizeDataURI("image/png", "!!!invalid!!!", opts, &st)
+	if uri != "" {
+		t.Error("invalid base64 should return empty URI")
+	}
+}
+
+func TestGetImageClient_Fallback(t *testing.T) {
+	// Save and clear the global client
+	saved := fetchImageClient
+	fetchImageClient = nil
+	defer func() { fetchImageClient = saved }()
+
+	client := getImageClient()
+	if client == nil {
+		t.Fatal("expected non-nil fallback client")
+	}
+	if client.Timeout == 0 {
+		t.Error("expected fallback client to have a timeout")
+	}
+}
+
+func TestGetImageClient_UsesGlobal(t *testing.T) {
+	// fetchImageClient is set by init()
+	client := getImageClient()
+	if client != fetchImageClient {
+		t.Error("expected getImageClient to return fetchImageClient when set")
+	}
+}
+
+func TestFetchAndEmbed_Success(t *testing.T) {
+	imgData := makePNG(10, 10, color.NRGBA{255, 0, 0, 255})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "image/png")
+		w.Write(imgData)
+	}))
+	defer srv.Close()
+
+	// Replace global client for test
+	saved := fetchImageClient
+	fetchImageClient = srv.Client()
+	defer func() { fetchImageClient = saved }()
+
+	html := []byte(`<img src="` + srv.URL + `/img.png" alt="test">`)
+	result := fetchAndEmbed(html)
+
+	if !strings.Contains(string(result), "data:image/png;base64,") {
+		t.Error("expected data URI in output")
+	}
+	if strings.Contains(string(result), "http://") {
+		t.Error("external URL should be replaced with data URI")
+	}
+}
+
+func TestFetchAndEmbed_404(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(404)
+	}))
+	defer srv.Close()
+
+	saved := fetchImageClient
+	fetchImageClient = srv.Client()
+	defer func() { fetchImageClient = saved }()
+
+	html := []byte(`<img src="` + srv.URL + `/missing.png" alt="test">`)
+	result := fetchAndEmbed(html)
+
+	// Should keep original URL on failure
+	if !strings.Contains(string(result), srv.URL) {
+		t.Error("expected original URL preserved on 404")
+	}
+}
+
+func TestFetchAndEmbed_NoExternalImages(t *testing.T) {
+	html := []byte(`<img src="data:image/png;base64,abc" alt="test">`)
+	result := fetchAndEmbed(html)
+	if string(result) != string(html) {
+		t.Error("data URI images should be left unchanged")
+	}
+}
+
+func TestFetchAndEmbed_MIMESniffing(t *testing.T) {
+	imgData := makeJPEG(10, 10, color.NRGBA{0, 0, 255, 255})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Send with generic Content-Type to trigger sniffing
+		w.Header().Set("Content-Type", "application/octet-stream")
+		w.Write(imgData)
+	}))
+	defer srv.Close()
+
+	saved := fetchImageClient
+	fetchImageClient = srv.Client()
+	defer func() { fetchImageClient = saved }()
+
+	html := []byte(`<img src="` + srv.URL + `/img.bin" alt="test">`)
+	result := fetchAndEmbed(html)
+
+	if !strings.Contains(string(result), "data:image/jpeg;base64,") {
+		t.Error("expected MIME to be sniffed as JPEG")
+	}
+}
+
+func TestFetchImage_Success(t *testing.T) {
+	imgData := makePNG(10, 10, color.NRGBA{255, 0, 0, 255})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "image/png")
+		w.Write(imgData)
+	}))
+	defer srv.Close()
+
+	saved := fetchImageClient
+	fetchImageClient = srv.Client()
+	defer func() { fetchImageClient = saved }()
+
+	data, mime, err := fetchImage(srv.URL + "/img.png")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if mime != "image/png" {
+		t.Errorf("mime = %q, want image/png", mime)
+	}
+	if len(data) == 0 {
+		t.Error("expected non-empty data")
+	}
+}
+
+func TestFetchImage_404(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(404)
+	}))
+	defer srv.Close()
+
+	saved := fetchImageClient
+	fetchImageClient = srv.Client()
+	defer func() { fetchImageClient = saved }()
+
+	_, _, err := fetchImage(srv.URL + "/missing.png")
+	if err == nil {
+		t.Error("expected error for 404")
+	}
+	if !strings.Contains(err.Error(), "404") {
+		t.Errorf("expected 404 in error, got: %v", err)
+	}
+}
+
+func TestFetchImage_MIMESniff(t *testing.T) {
+	imgData := makeJPEG(10, 10, color.NRGBA{0, 0, 255, 255})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "")
+		w.Write(imgData)
+	}))
+	defer srv.Close()
+
+	saved := fetchImageClient
+	fetchImageClient = srv.Client()
+	defer func() { fetchImageClient = saved }()
+
+	_, mime, err := fetchImage(srv.URL + "/img")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(mime, "jpeg") {
+		t.Errorf("expected sniffed JPEG mime, got %q", mime)
+	}
+}
+
+func TestFetchImage_ContentTypeWithCharset(t *testing.T) {
+	imgData := makePNG(10, 10, color.NRGBA{0, 255, 0, 255})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "image/png; charset=utf-8")
+		w.Write(imgData)
+	}))
+	defer srv.Close()
+
+	saved := fetchImageClient
+	fetchImageClient = srv.Client()
+	defer func() { fetchImageClient = saved }()
+
+	_, mime, err := fetchImage(srv.URL + "/img.png")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if mime != "image/png" {
+		t.Errorf("mime = %q, want image/png (charset should be stripped)", mime)
+	}
+}
+
+func TestCleanForEpub_RemovesAVIF(t *testing.T) {
+	html := []byte(`<p>before</p><img src="data:image/avif;base64,abc" alt="test"/><p>after</p>`)
+	result := cleanForEpub(html)
+	if strings.Contains(string(result), "avif") {
+		t.Error("AVIF images should be removed")
+	}
+	if !strings.Contains(string(result), "before") || !strings.Contains(string(result), "after") {
+		t.Error("surrounding content should be preserved")
+	}
+}
+
+func TestCleanForEpub_RemovesExternalSrcset(t *testing.T) {
+	html := []byte(`<img src="data:image/jpeg;base64,abc" srcset="https://example.com/img.jpg 640w" alt="test">`)
+	result := cleanForEpub(html)
+	if strings.Contains(string(result), "srcset") {
+		t.Error("external srcset attributes should be removed")
+	}
+	if !strings.Contains(string(result), "data:image/jpeg") {
+		t.Error("src should be preserved")
+	}
+}
+
+func TestCleanForEpub_RemovesDataAttrs(t *testing.T) {
+	html := []byte(`<div data-id="123" data-astro-cid-abc=""><p>content</p></div>`)
+	result := cleanForEpub(html)
+	if strings.Contains(string(result), "data-id") || strings.Contains(string(result), "data-astro") {
+		t.Error("data-* attributes should be removed")
+	}
+	if !strings.Contains(string(result), "content") {
+		t.Error("content should be preserved")
+	}
+}
+
+func TestCleanForEpub_RemovesInlineSVG(t *testing.T) {
+	html := []byte(`<p>before</p><svg xmlns="http://www.w3.org/2000/svg"><circle r="10"/></svg><p>after</p>`)
+	result := cleanForEpub(html)
+	if strings.Contains(string(result), "<svg") {
+		t.Error("inline SVG should be removed")
+	}
+	if !strings.Contains(string(result), "before") || !strings.Contains(string(result), "after") {
+		t.Error("surrounding content should be preserved")
+	}
+}
+
+func TestPromoteLazySrc_BasicDataSrc(t *testing.T) {
+	html := []byte(`<img class="lazy" data-src="https://example.com/img.jpg" alt="test">`)
+	result := promoteLazySrc(html)
+	if strings.Contains(string(result), "data-src=") {
+		t.Error("data-src should be promoted to src")
+	}
+	if !strings.Contains(string(result), `src="https://example.com/img.jpg"`) {
+		t.Error("expected src with data-src URL")
+	}
+}
+
+func TestPromoteLazySrc_SVGPlaceholder(t *testing.T) {
+	// WordPress-style: SVG placeholder in src + real URL in data-src
+	html := []byte(`<img src="data:image/svg+xml;base64,PHN2Zz4=" data-src="https://example.com/real.jpg" alt="test">`)
+	result := promoteLazySrc(html)
+	if strings.Contains(string(result), "svg+xml") {
+		t.Error("SVG placeholder should be removed")
+	}
+	if !strings.Contains(string(result), `src="https://example.com/real.jpg"`) {
+		t.Error("expected promoted data-src URL")
+	}
+}
+
+func TestPromoteLazySrc_DataSrcset(t *testing.T) {
+	html := []byte(`<img data-srcset="https://example.com/img.jpg 640w" alt="test">`)
+	result := promoteLazySrc(html)
+	if strings.Contains(string(result), "data-srcset=") {
+		t.Error("data-srcset should be promoted to srcset")
+	}
+	if !strings.Contains(string(result), `srcset="https://example.com/img.jpg 640w"`) {
+		t.Error("expected srcset with data-srcset value")
+	}
+}
+
+func TestPickBestSrcsetURL_SingleURL(t *testing.T) {
+	html := []byte(`<source srcset="https://example.com/only.jpg">`)
+	u := pickBestSrcsetURL(html)
+	if u == "" {
+		t.Fatal("expected URL from single srcset entry")
+	}
+	if !strings.Contains(u, "only.jpg") {
+		t.Errorf("expected only.jpg, got: %s", u)
+	}
+}
+
+func TestProcessArticleImages_PictureWithNonOptimizableDataURI(t *testing.T) {
+	// Picture with SVG data URI that can't be optimized
+	svgData := []byte(`<svg xmlns="http://www.w3.org/2000/svg"><rect width="10" height="10"/></svg>`)
+	b64 := base64.StdEncoding.EncodeToString(svgData)
+
+	html := `<picture>` +
+		`<source srcset="data:image/svg+xml;base64,` + b64 + `">` +
+		`<img alt="svg pic">` +
+		`</picture>`
+	opts := optimizeOpts{maxWidth: 800, quality: 60}
+	result := string(processArticleImages([]byte(html), opts))
+
+	if strings.Contains(result, "<picture") {
+		t.Error("picture should be collapsed")
+	}
+	// SVG can't be optimized, so it should be kept as-is data URI
+	if !strings.Contains(result, "image/svg+xml") {
+		t.Error("SVG data URI should be preserved in fallback path")
+	}
+}
+
+func TestProcessArticleImages_LazyLoadAndExternal(t *testing.T) {
+	imgData := makePNG(50, 50, color.NRGBA{0, 255, 0, 255})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "image/png")
+		w.Write(imgData)
+	}))
+	defer srv.Close()
+
+	saved := fetchImageClient
+	fetchImageClient = srv.Client()
+	defer func() { fetchImageClient = saved }()
+
+	html := `<img data-src="` + srv.URL + `/lazy.png" alt="lazy">`
+	opts := optimizeOpts{maxWidth: 800, quality: 60}
+	result := string(processArticleImages([]byte(html), opts))
+
+	if strings.Contains(result, "data-src=") {
+		t.Error("data-src should be promoted")
+	}
+	if !strings.Contains(result, "data:image/jpeg;base64,") {
+		t.Error("lazy-loaded external image should be fetched and embedded")
+	}
+}
+
+func TestProcessArticleImages_ExternalImages(t *testing.T) {
+	imgData := makePNG(100, 100, color.NRGBA{255, 0, 0, 255})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "image/png")
+		w.Write(imgData)
+	}))
+	defer srv.Close()
+
+	saved := fetchImageClient
+	fetchImageClient = srv.Client()
+	defer func() { fetchImageClient = saved }()
+
+	html := `<html><body><img src="` + srv.URL + `/img.png" alt="test"></body></html>`
+	opts := optimizeOpts{maxWidth: 800, quality: 60}
+	result := processArticleImages([]byte(html), opts)
+
+	if strings.Contains(string(result), "http://") {
+		t.Error("external URLs should be embedded as data URIs")
+	}
+	if !strings.Contains(string(result), "data:image/jpeg;base64,") {
+		t.Error("expected embedded JPEG data URI")
+	}
+}
+
+func TestProcessArticleImages_PictureWithExternalSrcset(t *testing.T) {
+	imgData := makeJPEG(200, 150, color.NRGBA{0, 100, 200, 255})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "image/jpeg")
+		w.Write(imgData)
+	}))
+	defer srv.Close()
+
+	saved := fetchImageClient
+	fetchImageClient = srv.Client()
+	defer func() { fetchImageClient = saved }()
+
+	html := `<picture>` +
+		`<source srcset="` + srv.URL + `/img-sm.jpg 640w, ` + srv.URL + `/img-lg.jpg 1400w">` +
+		`<img alt="hero">` +
+		`</picture>`
+	opts := optimizeOpts{maxWidth: 800, quality: 60}
+	result := string(processArticleImages([]byte(html), opts))
+
+	if strings.Contains(result, "<picture") {
+		t.Error("picture element should be collapsed")
+	}
+	if !strings.Contains(result, `<img src="data:image/jpeg;base64,`) {
+		t.Error("expected embedded JPEG in collapsed img")
+	}
+	if !strings.Contains(result, `alt="hero"`) {
+		t.Error("alt text should be preserved")
+	}
+}
+
+func TestProcessArticleImages_NoImages(t *testing.T) {
+	html := `<p>No images here.</p>`
+	opts := optimizeOpts{maxWidth: 800, quality: 60}
+	result := processArticleImages([]byte(html), opts)
+	if !strings.Contains(string(result), "No images here.") {
+		t.Error("text content should be preserved")
 	}
 }

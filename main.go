@@ -77,53 +77,35 @@ func readURLFile(path string) ([]string, error) {
 	return urls, scanner.Err()
 }
 
-func main() {
-	maxWidth := flag.Int("max-width", 800, "Max pixel width (height scales proportionally)")
-	quality := flag.Int("quality", 60, "JPEG quality 1-95")
-	grayscale := flag.Bool("grayscale", false, "Convert to grayscale")
-	output := flag.String("o", "", "Output file (default: stdout)")
-	titleOverride := flag.String("title", "", "Override article/book title")
-	timeout := flag.Duration("timeout", 30*time.Second, "HTTP fetch timeout")
-	userAgent := flag.String("user-agent", defaultUA, "HTTP User-Agent header")
-	epubMode := flag.Bool("epub", false, "Generate epub (requires -o, accepts multiple URLs or a .txt file)")
-	silent := flag.Bool("silent", false, "Suppress all output except errors (for pipeline use)")
-	flag.Usage = func() {
-		fmt.Fprintf(os.Stderr, "Usage: deckle [options] <URL>\n")
-		fmt.Fprintf(os.Stderr, "       deckle [options] -epub -o out.epub <URL|file.txt> [...]\n\n")
-		fmt.Fprintf(os.Stderr, "Fetch URLs and produce clean HTML or epub for e-readers.\n\n")
-		flag.PrintDefaults()
-	}
-	flag.Parse()
+// cliConfig holds parsed command-line options.
+type cliConfig struct {
+	opts          optimizeOpts
+	output        string
+	titleOverride string
+	timeout       time.Duration
+	userAgent     string
+	epubMode      bool
+	args          []string
+}
 
-	if *silent {
-		logOut = io.Discard
-	}
-
-	opts := optimizeOpts{
-		maxWidth:  *maxWidth,
-		quality:   *quality,
-		grayscale: *grayscale,
-	}
-
-	if *epubMode {
-		if *output == "" {
-			fmt.Fprintln(os.Stderr, "Error: -epub requires -o output.epub")
-			os.Exit(1)
+// run executes the main application logic, returning any error.
+func run(cfg cliConfig) error {
+	if cfg.epubMode {
+		if cfg.output == "" {
+			return fmt.Errorf("-epub requires -o output.epub")
 		}
-		if flag.NArg() < 1 {
-			flag.Usage()
-			os.Exit(1)
+		if len(cfg.args) < 1 {
+			return fmt.Errorf("epub mode requires at least one URL or file argument")
 		}
 
 		// Collect URLs from args (URLs or .txt files)
 		var urls []string
 		var txtFilename string // basename of first .txt file (for title derivation)
-		for _, arg := range flag.Args() {
+		for _, arg := range cfg.args {
 			if strings.HasSuffix(arg, ".txt") {
 				fileURLs, err := readURLFile(arg)
 				if err != nil {
-					fmt.Fprintf(os.Stderr, "Error reading %s: %v\n", arg, err)
-					os.Exit(1)
+					return fmt.Errorf("reading %s: %w", arg, err)
 				}
 				urls = append(urls, fileURLs...)
 				if txtFilename == "" {
@@ -139,8 +121,7 @@ func main() {
 		}
 
 		if len(urls) == 0 {
-			fmt.Fprintln(os.Stderr, "Error: no URLs provided")
-			os.Exit(1)
+			return fmt.Errorf("no URLs provided")
 		}
 
 		// Process each URL
@@ -163,9 +144,9 @@ func main() {
 				defer func() { <-sem }() // Release
 
 				fmt.Fprintf(logOut, "[%d/%d] %s\n", i+1, len(urls), rawURL)
-				h, t, src, err := processURL(rawURL, opts, *timeout, *userAgent, "")
+				h, t, src, err := processURL(rawURL, cfg.opts, cfg.timeout, cfg.userAgent, "")
 				if err != nil {
-					fmt.Fprintf(os.Stderr, "  Error: %v (skipping)\n", err)
+					fmt.Fprintf(logOut, "  Error: %v (skipping)\n", err)
 					return
 				}
 				results[i] = result{html: h, title: t, src: src, ok: true}
@@ -188,12 +169,11 @@ func main() {
 		}
 
 		if len(articles) == 0 {
-			fmt.Fprintln(os.Stderr, "Error: no articles converted")
-			os.Exit(1)
+			return fmt.Errorf("no articles converted")
 		}
 
 		// Derive book title: -title flag > .txt filename > first article title > output filename
-		bookTitle := *titleOverride
+		bookTitle := cfg.titleOverride
 		if bookTitle == "" && txtFilename != "" {
 			bookTitle = txtFilename
 		}
@@ -206,39 +186,78 @@ func main() {
 		}
 		if bookTitle == "" {
 			// Final fallback: output filename
-			bookTitle = strings.TrimSuffix(*output, ".epub")
+			bookTitle = strings.TrimSuffix(cfg.output, ".epub")
 			if idx := strings.LastIndex(bookTitle, "/"); idx >= 0 {
 				bookTitle = bookTitle[idx+1:]
 			}
 		}
 
 		fmt.Fprintf(logOut, "Building epub from %d articles...\n", len(articles))
-		if err := buildEpub(articles, bookTitle, *output); err != nil {
-			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-			os.Exit(1)
+		if err := buildEpub(articles, bookTitle, cfg.output); err != nil {
+			return fmt.Errorf("building epub: %w", err)
 		}
-		fmt.Fprintf(logOut, "✓ %s (%d articles)\n", *output, len(articles))
+		fmt.Fprintf(logOut, "✓ %s (%d articles)\n", cfg.output, len(articles))
+		return nil
+	}
 
+	// Single URL mode
+	if len(cfg.args) != 1 {
+		return fmt.Errorf("single URL mode requires exactly one URL argument")
+	}
+
+	final, _, _, err := processURL(cfg.args[0], cfg.opts, cfg.timeout, cfg.userAgent, cfg.titleOverride)
+	if err != nil {
+		return err
+	}
+
+	if cfg.output != "" {
+		if err := os.WriteFile(cfg.output, []byte(final), 0644); err != nil {
+			return fmt.Errorf("writing output: %w", err)
+		}
 	} else {
-		// Single URL mode
-		if flag.NArg() != 1 {
-			flag.Usage()
-			os.Exit(1)
-		}
+		os.Stdout.WriteString(final)
+	}
+	return nil
+}
 
-		final, _, _, err := processURL(flag.Arg(0), opts, *timeout, *userAgent, *titleOverride)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-			os.Exit(1)
-		}
+func main() {
+	maxWidth := flag.Int("max-width", 800, "Max pixel width (height scales proportionally)")
+	quality := flag.Int("quality", 60, "JPEG quality 1-95")
+	grayscale := flag.Bool("grayscale", false, "Convert to grayscale")
+	output := flag.String("o", "", "Output file (default: stdout)")
+	titleOverride := flag.String("title", "", "Override article/book title")
+	timeout := flag.Duration("timeout", 30*time.Second, "HTTP fetch timeout")
+	userAgent := flag.String("user-agent", defaultUA, "HTTP User-Agent header")
+	epubMode := flag.Bool("epub", false, "Generate epub (requires -o, accepts multiple URLs or a .txt file)")
+	silent := flag.Bool("silent", false, "Suppress all output except errors (for pipeline use)")
+	flag.Usage = func() {
+		fmt.Fprintf(os.Stderr, "Usage: deckle [options] <URL>\n")
+		fmt.Fprintf(os.Stderr, "       deckle [options] -epub -o out.epub <URL|file.txt> [...]\n\n")
+		fmt.Fprintf(os.Stderr, "Fetch URLs and produce clean HTML or epub for e-readers.\n\n")
+		flag.PrintDefaults()
+	}
+	flag.Parse()
 
-		if *output != "" {
-			if err := os.WriteFile(*output, []byte(final), 0644); err != nil {
-				fmt.Fprintf(os.Stderr, "Error writing output: %v\n", err)
-				os.Exit(1)
-			}
-		} else {
-			os.Stdout.WriteString(final)
-		}
+	if *silent {
+		logOut = io.Discard
+	}
+
+	cfg := cliConfig{
+		opts: optimizeOpts{
+			maxWidth:  *maxWidth,
+			quality:   *quality,
+			grayscale: *grayscale,
+		},
+		output:        *output,
+		titleOverride: *titleOverride,
+		timeout:       *timeout,
+		userAgent:     *userAgent,
+		epubMode:      *epubMode,
+		args:          flag.Args(),
+	}
+
+	if err := run(cfg); err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		os.Exit(1)
 	}
 }

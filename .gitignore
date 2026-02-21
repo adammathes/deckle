@@ -6,3 +6,6 @@ deckle
 
 # Build output
 *.epub
+
+# Test coverage
+coverage.out

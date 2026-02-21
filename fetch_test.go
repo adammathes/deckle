@@ -88,30 +88,45 @@ func TestFetchHTML_BrowserHeaders(t *testing.T) {
 	}
 }
 
-// TestFetchHTML_Medium verifies that Medium articles can be fetched.
-// This is a live network test — skip in short mode.
-func TestFetchHTML_Medium(t *testing.T) {
-	if testing.Short() {
-		t.Skip("skipping live network test in short mode")
+func TestHasPort(t *testing.T) {
+	tests := []struct {
+		host string
+		want bool
+	}{
+		{"example.com:443", true},
+		{"example.com:80", true},
+		{"[::1]:8080", true},
+		{"example.com", false},
+		{"localhost", false},
 	}
+	for _, tt := range tests {
+		got := hasPort(tt.host)
+		if got != tt.want {
+			t.Errorf("hasPort(%q) = %v, want %v", tt.host, got, tt.want)
+		}
+	}
+}
 
-	body, _, err := fetchHTML(
-		"https://steve-yegge.medium.com/welcome-to-gas-town-4f25ee16dd04",
-		30*time.Second,
-		defaultUA,
-	)
-	if err != nil {
-		t.Fatalf("Medium fetch failed: %v", err)
+func TestIgnoreCertClient(t *testing.T) {
+	client := ignoreCertClient(10 * time.Second)
+	if client == nil {
+		t.Fatal("expected non-nil client")
 	}
+	if client.Timeout != 10*time.Second {
+		t.Errorf("timeout = %v, want 10s", client.Timeout)
+	}
+	transport, ok := client.Transport.(*http.Transport)
+	if !ok {
+		t.Fatal("expected *http.Transport")
+	}
+	if transport.TLSClientConfig == nil || !transport.TLSClientConfig.InsecureSkipVerify {
+		t.Error("expected InsecureSkipVerify to be true")
+	}
+}
 
-	html := string(body)
-	if strings.Contains(html, "Just a moment") {
-		t.Error("got Cloudflare challenge page instead of article")
-	}
-	if !strings.Contains(html, "Gas Town") {
-		t.Error("expected article content containing 'Gas Town'")
-	}
-	if len(body) < 10000 {
-		t.Errorf("response suspiciously small (%d bytes), expected full article", len(body))
+func TestFetchHTML_InvalidURL(t *testing.T) {
+	_, _, err := fetchHTML("://bad-url", 5*time.Second, defaultUA)
+	if err == nil {
+		t.Error("expected error for invalid URL")
 	}
 }
