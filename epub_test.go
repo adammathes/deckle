@@ -3,6 +3,7 @@ package main
 import (
 	"archive/zip"
 	"image/color"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -62,9 +63,19 @@ func TestBuildEpub_Basic(t *testing.T) {
 	imgData := makePNG(100, 100, color.NRGBA{255, 0, 0, 255})
 	imgURI := dataURI("image/png", imgData)
 
-	articles := []string{
-		`<html><body><h1>First Article</h1><p>Some content here.</p></body></html>`,
-		`<html><body><h1>Second Article</h1><p>More content.</p><img src="` + imgURI + `" alt="test"></body></html>`,
+	articles := []epubArticle{
+		{
+			HTML:  `<html><body><h1>First Article</h1><p>Some content here.</p></body></html>`,
+			Title: "First Article",
+			URL:   "https://example.com/first",
+		},
+		{
+			HTML:     `<html><body><h1>Second Article</h1><p>More content.</p><img src="` + imgURI + `" alt="test"></body></html>`,
+			Title:    "Second Article",
+			URL:      "https://example.com/second",
+			Byline:   "Jane Doe",
+			SiteName: "Example",
+		},
 	}
 
 	outPath := filepath.Join(t.TempDir(), "test.epub")
@@ -93,6 +104,11 @@ func TestBuildEpub_Basic(t *testing.T) {
 	fileNames := map[string]bool{}
 	for _, f := range zr.File {
 		fileNames[f.Name] = true
+	}
+
+	// Must have table of contents
+	if !fileNames["EPUB/xhtml/contents.xhtml"] {
+		t.Error("missing contents.xhtml (front matter TOC)")
 	}
 
 	// Must have article files
@@ -132,6 +148,45 @@ func TestBuildEpub_Basic(t *testing.T) {
 			t.Logf("  %s", name)
 		}
 	}
+
+	// Verify TOC content has article links and metadata
+	tocFile := findZipFile(zr, "EPUB/xhtml/contents.xhtml")
+	if tocFile != "" {
+		if !strings.Contains(tocFile, "First Article") {
+			t.Error("TOC should contain 'First Article'")
+		}
+		if !strings.Contains(tocFile, "Second Article") {
+			t.Error("TOC should contain 'Second Article'")
+		}
+		if !strings.Contains(tocFile, "Jane Doe") {
+			t.Error("TOC should contain author 'Jane Doe'")
+		}
+		if !strings.Contains(tocFile, "example.com/second") {
+			t.Error("TOC should contain source URL")
+		}
+		if !strings.Contains(tocFile, "article001.xhtml") {
+			t.Error("TOC should link to article001.xhtml")
+		}
+	}
+}
+
+// findZipFile reads the contents of a file from a zip reader by name.
+func findZipFile(zr *zip.ReadCloser, name string) string {
+	for _, f := range zr.File {
+		if f.Name == name {
+			rc, err := f.Open()
+			if err != nil {
+				return ""
+			}
+			defer rc.Close()
+			data, err := io.ReadAll(rc)
+			if err != nil {
+				return ""
+			}
+			return string(data)
+		}
+	}
+	return ""
 }
 
 func TestBuildEpub_EpubCheck(t *testing.T) {
@@ -143,13 +198,19 @@ func TestBuildEpub_EpubCheck(t *testing.T) {
 	imgData := makeJPEG(200, 150, color.NRGBA{0, 100, 200, 255})
 	imgURI := dataURI("image/jpeg", imgData)
 
-	articles := []string{
-		`<html><body><h1>Chapter One</h1>
-		<p>This is a test chapter with some content for validation.</p>
-		<img src="` + imgURI + `" alt="test image"/>
-		<p>Another paragraph after the image.</p></body></html>`,
-		`<html><body><h1>Chapter Two</h1>
-		<p>Second chapter with more content to test epub generation.</p></body></html>`,
+	articles := []epubArticle{
+		{
+			HTML:     `<html><body><h1>Chapter One</h1><p>This is a test chapter with some content for validation.</p><img src="` + imgURI + `" alt="test image"/><p>Another paragraph after the image.</p></body></html>`,
+			Title:    "Chapter One",
+			URL:      "https://example.com/chapter-one",
+			Byline:   "Test Author",
+			SiteName: "Example Blog",
+		},
+		{
+			HTML:  `<html><body><h1>Chapter Two</h1><p>Second chapter with more content to test epub generation.</p></body></html>`,
+			Title: "Chapter Two",
+			URL:   "https://example.com/chapter-two",
+		},
 	}
 
 	outPath := filepath.Join(t.TempDir(), "check.epub")
