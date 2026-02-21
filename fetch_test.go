@@ -115,3 +115,26 @@ func TestFetchHTML_Medium(t *testing.T) {
 		t.Errorf("response suspiciously small (%d bytes), expected full article", len(body))
 	}
 }
+
+func TestFetchHTML_LargeResponse(t *testing.T) {
+	// 15MB response
+	const totalSize = 15 * 1024 * 1024
+	const limitSize = 10 * 1024 * 1024
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		chunk := make([]byte, 1024*1024)
+		for i := 0; i < 15; i++ {
+			w.Write(chunk)
+		}
+	}))
+	defer srv.Close()
+
+	body, _, err := fetchHTML(srv.URL, 5*time.Second, defaultUA)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(body) != limitSize {
+		t.Errorf("got body length %d, want %d (truncated)", len(body), limitSize)
+	}
+}
