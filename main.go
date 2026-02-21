@@ -25,18 +25,18 @@ import (
 var logOut io.Writer = os.Stderr
 
 // processURL fetches a URL and runs the full article pipeline.
-// Returns the final HTML string and the article title.
-func processURL(rawURL string, opts optimizeOpts, timeout time.Duration, userAgent string, titleOverride string) (string, string, error) {
+// Returns the final HTML string, article title, source info, and any error.
+func processURL(rawURL string, opts optimizeOpts, timeout time.Duration, userAgent string, titleOverride string) (string, string, sourceInfo, error) {
 	htmlBytes, pageURL, err := fetchHTML(rawURL, timeout, userAgent)
 	if err != nil {
-		return "", "", err
+		return "", "", sourceInfo{}, err
 	}
 
 	htmlBytes = promoteLazySrc(htmlBytes)
 
 	content, meta, err := extractArticle(htmlBytes, pageURL)
 	if err != nil {
-		return "", "", err
+		return "", "", sourceInfo{}, err
 	}
 	fmt.Fprintf(logOut, "Title: %s\n", meta.Title)
 
@@ -54,7 +54,7 @@ func processURL(rawURL string, opts optimizeOpts, timeout time.Duration, userAge
 	}
 	final := normalizeHeadings(string(result), finalTitle, src)
 
-	return final, finalTitle, nil
+	return final, finalTitle, src, nil
 }
 
 // readURLFile reads a file containing one URL per line, skipping blanks and comments.
@@ -117,6 +117,7 @@ func main() {
 
 		// Collect URLs from args (URLs or .txt files)
 		var urls []string
+		var txtFilename string // basename of first .txt file (for title derivation)
 		for _, arg := range flag.Args() {
 			if strings.HasSuffix(arg, ".txt") {
 				fileURLs, err := readURLFile(arg)
@@ -125,6 +126,13 @@ func main() {
 					os.Exit(1)
 				}
 				urls = append(urls, fileURLs...)
+				if txtFilename == "" {
+					name := arg
+					if idx := strings.LastIndex(name, "/"); idx >= 0 {
+						name = name[idx+1:]
+					}
+					txtFilename = strings.TrimSuffix(name, ".txt")
+				}
 			} else {
 				urls = append(urls, arg)
 			}
@@ -137,8 +145,13 @@ func main() {
 
 		// Process each URL
 		// Parallelize with a bounded semaphore to avoid overwhelming resources
-		rawArticles := make([]string, len(urls))
-		success := make([]bool, len(urls))
+		type result struct {
+			html  string
+			title string
+			src   sourceInfo
+			ok    bool
+		}
+		results := make([]result, len(urls))
 		var wg sync.WaitGroup
 		sem := make(chan struct{}, 5) // Limit to 5 concurrent jobs
 
@@ -150,22 +163,27 @@ func main() {
 				defer func() { <-sem }() // Release
 
 				fmt.Fprintf(logOut, "[%d/%d] %s\n", i+1, len(urls), rawURL)
-				html, _, err := processURL(rawURL, opts, *timeout, *userAgent, "")
+				h, t, src, err := processURL(rawURL, opts, *timeout, *userAgent, "")
 				if err != nil {
 					fmt.Fprintf(os.Stderr, "  Error: %v (skipping)\n", err)
 					return
 				}
-				rawArticles[i] = html
-				success[i] = true
+				results[i] = result{html: h, title: t, src: src, ok: true}
 			}(i, rawURL)
 		}
 		wg.Wait()
 
 		// Filter successful articles preserving order
-		var articles []string
-		for i, s := range success {
-			if s {
-				articles = append(articles, rawArticles[i])
+		var articles []epubArticle
+		for _, r := range results {
+			if r.ok {
+				articles = append(articles, epubArticle{
+					HTML:     r.html,
+					Title:    r.title,
+					URL:      r.src.URL,
+					Byline:   r.src.Byline,
+					SiteName: r.src.SiteName,
+				})
 			}
 		}
 
@@ -174,10 +192,20 @@ func main() {
 			os.Exit(1)
 		}
 
-		// Build epub
+		// Derive book title: -title flag > .txt filename > first article title > output filename
 		bookTitle := *titleOverride
+		if bookTitle == "" && txtFilename != "" {
+			bookTitle = txtFilename
+		}
 		if bookTitle == "" {
-			// Derive from output filename
+			if len(articles) > 1 {
+				bookTitle = articles[0].Title + " & more"
+			} else {
+				bookTitle = articles[0].Title
+			}
+		}
+		if bookTitle == "" {
+			// Final fallback: output filename
 			bookTitle = strings.TrimSuffix(*output, ".epub")
 			if idx := strings.LastIndex(bookTitle, "/"); idx >= 0 {
 				bookTitle = bookTitle[idx+1:]
@@ -198,7 +226,7 @@ func main() {
 			os.Exit(1)
 		}
 
-		final, _, err := processURL(flag.Arg(0), opts, *timeout, *userAgent, *titleOverride)
+		final, _, _, err := processURL(flag.Arg(0), opts, *timeout, *userAgent, *titleOverride)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 			os.Exit(1)

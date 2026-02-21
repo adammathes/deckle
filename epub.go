@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"encoding/base64"
 	"fmt"
+	gohtml "html"
 	"regexp"
 	"strings"
 
@@ -21,10 +22,13 @@ var (
 	stripTagsRe = regexp.MustCompile(`<[^>]*>`)
 )
 
-// article holds a single processed article ready for epub inclusion.
-type article struct {
-	title string
-	body  string // HTML body content (between <body> tags)
+// epubArticle holds a processed article and its metadata for epub inclusion.
+type epubArticle struct {
+	HTML     string // Full HTML (with <body> tags)
+	Title    string // Cleaned article title
+	URL      string // Original source URL
+	Byline   string // Author name from metadata
+	SiteName string // Publication name from metadata
 }
 
 // extractBodyContent extracts the content between <body> and </body> tags.
@@ -255,15 +259,65 @@ func renderXHTML(buf *bytes.Buffer, n *html.Node) {
 	}
 }
 
-// buildEpub creates an epub3 file from a list of HTML article contents.
-// Each article should be complete HTML with <body> containing the article
-// and an <h1> title element.
-func buildEpub(articles []string, title string, outputPath string) error {
+// buildTOCBody generates the HTML body for the front matter table of contents.
+// It creates a linked list of articles with their authors and source URLs.
+func buildTOCBody(articles []epubArticle) string {
+	var b strings.Builder
+	b.WriteString("<h1>Contents</h1>\n<ol class=\"toc\">\n")
+	for i, a := range articles {
+		filename := fmt.Sprintf("article%03d.xhtml", i+1)
+		title := a.Title
+		if title == "" {
+			title = fmt.Sprintf("Article %d", i+1)
+		}
+		b.WriteString("<li>\n")
+		b.WriteString(fmt.Sprintf(`<a href="%s">%s</a>`, filename, gohtml.EscapeString(title)))
+		b.WriteByte('\n')
+
+		// Build metadata line: author · site · url
+		var meta []string
+		if a.Byline != "" {
+			meta = append(meta, gohtml.EscapeString(a.Byline))
+		}
+		if a.SiteName != "" {
+			meta = append(meta, gohtml.EscapeString(a.SiteName))
+		}
+		metaLine := strings.Join(meta, " · ")
+
+		if a.URL != "" {
+			displayURL := a.URL
+			for _, prefix := range []string{"https://", "http://"} {
+				displayURL = strings.TrimPrefix(displayURL, prefix)
+			}
+			displayURL = strings.TrimSuffix(displayURL, "/")
+			link := fmt.Sprintf(`<a href="%s">%s</a>`,
+				gohtml.EscapeString(a.URL), gohtml.EscapeString(displayURL))
+			if metaLine != "" {
+				metaLine += "<br/>" + link
+			} else {
+				metaLine = link
+			}
+		}
+
+		if metaLine != "" {
+			b.WriteString(fmt.Sprintf(`<p class="toc-meta">%s</p>`, metaLine))
+			b.WriteByte('\n')
+		}
+		b.WriteString("</li>\n")
+	}
+	b.WriteString("</ol>\n")
+	return b.String()
+}
+
+// buildEpub creates an epub3 file from a list of articles with metadata.
+// It generates a front matter table of contents followed by the article sections.
+func buildEpub(articles []epubArticle, title string, outputPath string) error {
 	e, err := epub.NewEpub(title)
 	if err != nil {
 		return fmt.Errorf("creating epub: %w", err)
 	}
 	e.SetLang("en")
+	e.SetAuthor("deckle")
 
 	// Add minimal CSS for readability on e-readers
 	css := `body { margin: 1em; line-height: 1.5; }
@@ -271,7 +325,12 @@ img { max-width: 100%; height: auto; }
 pre, code { font-size: 0.85em; }
 blockquote { margin-left: 1em; padding-left: 0.5em; border-left: 2px solid #999; }
 .byline { font-size: 0.85em; color: #666; margin-top: -0.5em; margin-bottom: 1.5em; }
-.byline a { color: #666; }`
+.byline a { color: #666; }
+.toc { list-style-type: none; padding-left: 0; }
+.toc li { margin-bottom: 1.2em; }
+.toc a { text-decoration: none; }
+.toc-meta { font-size: 0.85em; color: #666; margin-top: 0.1em; }
+.toc-meta a { color: #666; }`
 	cssDataURI := "data:text/css;base64," + base64.StdEncoding.EncodeToString([]byte(css))
 	cssPath, err := e.AddCSS(cssDataURI, "styles.css")
 	if err != nil {
@@ -280,8 +339,15 @@ blockquote { margin-left: 1em; padding-left: 0.5em; border-left: 2px solid #999;
 		cssPath = ""
 	}
 
-	for i, articleHTML := range articles {
-		body := extractBodyContent(articleHTML)
+	// Add front matter table of contents
+	tocBody := buildTOCBody(articles)
+	_, err = e.AddSection(tocBody, "Contents", "contents.xhtml", cssPath)
+	if err != nil {
+		fmt.Fprintf(logOut, "Warning: could not add table of contents: %v\n", err)
+	}
+
+	for i, a := range articles {
+		body := extractBodyContent(a.HTML)
 		chTitle := extractH1Title(body)
 		if chTitle == "" {
 			chTitle = fmt.Sprintf("Article %d", i+1)
