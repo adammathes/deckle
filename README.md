@@ -1,8 +1,12 @@
 # deckle
 
-Turn a reading list into a clean epub. Paste some URLs, get a book for your e-reader — no ads, no popups, no cookie banners, just the articles and their images.
+Turn a reading list into a tidy, efficient, optimized epub. Paste some URLs, get a book suitable for an e-reader with just the articles and their images and all the fat trimmed off.
 
 Fetches each article, strips away everything that isn't content, optimizes images for e-ink displays, and packages the result as an epub with a table of contents.
+
+## ⚠️ WARNING: Vibecoded Experiment
+
+The author (Adam Mathes) is using this regularly but it is new and AI-generated. I think the tests and things are good but use at your own risk.
 
 ## Install
 
@@ -26,8 +30,8 @@ deckle -epub -grayscale -o reading-list.epub reading-list.txt
 ## How it works
 
 1. **Fetches** each page with browser-like TLS fingerprinting (handles Cloudflare, Medium, etc.)
-2. **Extracts** the article using Mozilla's Readability algorithm — strips nav, footers, ads, sidebars
-3. **Optimizes images** — fetches external images, collapses `<picture>` elements, resizes for e-ink (800px wide, grayscale JPEG)
+2. **Extracts** the article using Mozilla's [Readability](https://codeberg.org/readeck/go-readability) algorithm — strips nav, footers, ads, sidebars
+3. **Optimizes images** — fetches external images, collapses `<picture>` elements, resizes for e-ink (default 800px wide, grayscale JPEG)
 4. **Adds attribution** — author byline and source URL under each chapter title
 5. **Packages** into a valid epub3 with table of contents
 
@@ -64,3 +68,13 @@ deckle -grayscale -o article.html https://example.com/article
   -o FILE            Output file (default: stdout)
   -timeout DURATION  HTTP fetch timeout (default: 30s)
 ```
+
+## Origin 
+
+I asked AI to give me some reading lists on topics for my ereader and a pipeline for generating epub out of it using existing nice tools. I ended up with epubs with literally hundreds of megabytes of images and garbage in them that often didn't even get through the conversion process to epub! Or were invalid epubs. So I rolled up my sleeves, then rolled them back up and told AI to make this.
+
+## Etymology
+
+Books: [A deckle edge is a feathered edge on a piece of paper, in contrast to a cut edge ](https://en.wikipedia.org/wiki/Deckle_edge)
+
+Beef: in the conext of corned beerf: the point cut of the brisket, a fattier, more intensely flavored, and marbled portion of the beef brisket
