@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -276,6 +277,373 @@ func TestPipeline_ReadabilityStripsBoilerplate(t *testing.T) {
 	}
 	if strings.Contains(content, "Trending") {
 		t.Error("sidebar should be stripped")
+	}
+}
+
+func TestReadURLFile(t *testing.T) {
+	content := "https://example.com/article1\n\n# This is a comment\nhttps://example.com/article2\n  \nhttps://example.com/article3\n"
+	tmpFile := filepath.Join(t.TempDir(), "urls.txt")
+	os.WriteFile(tmpFile, []byte(content), 0644)
+
+	urls, err := readURLFile(tmpFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(urls) != 3 {
+		t.Errorf("expected 3 URLs, got %d", len(urls))
+	}
+	expected := []string{
+		"https://example.com/article1",
+		"https://example.com/article2",
+		"https://example.com/article3",
+	}
+	for i, u := range urls {
+		if u != expected[i] {
+			t.Errorf("urls[%d] = %q, want %q", i, u, expected[i])
+		}
+	}
+}
+
+func TestReadURLFile_Empty(t *testing.T) {
+	tmpFile := filepath.Join(t.TempDir(), "empty.txt")
+	os.WriteFile(tmpFile, []byte("# only comments\n\n"), 0644)
+
+	urls, err := readURLFile(tmpFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(urls) != 0 {
+		t.Errorf("expected 0 URLs, got %d", len(urls))
+	}
+}
+
+func TestReadURLFile_NotFound(t *testing.T) {
+	_, err := readURLFile("/nonexistent/file.txt")
+	if err == nil {
+		t.Error("expected error for missing file")
+	}
+}
+
+func TestProcessURL(t *testing.T) {
+	imgData := makePNG(100, 100, color.NRGBA{200, 100, 50, 255})
+	imgURI := "data:image/png;base64," + base64.StdEncoding.EncodeToString(imgData)
+
+	pageHTML := `<!DOCTYPE html>
+<html><head><title>Process Test</title></head><body>
+<article>
+<h1>Process Test</h1>
+<p>This is a test article for the processURL function. It has enough content
+for readability to extract it as the main article. More text here to ensure
+the content threshold is met by the readability algorithm.</p>
+<img src="` + imgURI + `" alt="test">
+<p>Another paragraph with more content to satisfy readability requirements.
+The article needs substantial text to be recognized properly.</p>
+</article>
+</body></html>`
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.Write([]byte(pageHTML))
+	}))
+	defer srv.Close()
+
+	opts := optimizeOpts{maxWidth: 800, quality: 60}
+	html, title, src, err := processURL(srv.URL, opts, 5*time.Second, "test-agent", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(title, "Process Test") {
+		t.Errorf("title = %q, expected to contain 'Process Test'", title)
+	}
+	if src.URL != srv.URL {
+		t.Errorf("src.URL = %q, want %q", src.URL, srv.URL)
+	}
+	if !strings.Contains(html, "<h1>") {
+		t.Error("expected H1 in output")
+	}
+}
+
+func TestProcessURL_TitleOverride(t *testing.T) {
+	pageHTML := `<!DOCTYPE html>
+<html><head><title>Original Title</title></head><body>
+<article>
+<h1>Original Title</h1>
+<p>This is a test article for title override testing. It has enough content
+for readability. More text here to ensure the content threshold is properly met.</p>
+<p>Second paragraph with more meaningful content that helps readability decide
+this is the main article content region of the page.</p>
+</article>
+</body></html>`
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.Write([]byte(pageHTML))
+	}))
+	defer srv.Close()
+
+	opts := optimizeOpts{maxWidth: 800, quality: 60}
+	_, title, _, err := processURL(srv.URL, opts, 5*time.Second, "test-agent", "Custom Title")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if title != "Custom Title" {
+		t.Errorf("title = %q, want 'Custom Title'", title)
+	}
+}
+
+func TestProcessURL_FetchError(t *testing.T) {
+	opts := optimizeOpts{maxWidth: 800, quality: 60}
+	_, _, _, err := processURL("http://localhost:1/nonexistent", opts, 1*time.Second, "test-agent", "")
+	if err == nil {
+		t.Error("expected error for unreachable URL")
+	}
+}
+
+func TestRun_SingleURLMode(t *testing.T) {
+	pageHTML := `<!DOCTYPE html>
+<html><head><title>Run Test</title></head><body>
+<article>
+<h1>Run Test</h1>
+<p>This is a test article for the run function. It has enough content
+for readability to extract it as the main article. More text here to
+ensure the content threshold is met by the readability algorithm.</p>
+<p>Another paragraph with additional content for readability.</p>
+</article>
+</body></html>`
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.Write([]byte(pageHTML))
+	}))
+	defer srv.Close()
+
+	outFile := filepath.Join(t.TempDir(), "output.html")
+	cfg := cliConfig{
+		opts:      optimizeOpts{maxWidth: 800, quality: 60},
+		output:    outFile,
+		timeout:   5 * time.Second,
+		userAgent: "test-agent",
+		args:      []string{srv.URL},
+	}
+
+	err := run(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	data, err := os.ReadFile(outFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), "Run Test") {
+		t.Error("output should contain article title")
+	}
+}
+
+func TestRun_SingleURLMode_NoOutput(t *testing.T) {
+	pageHTML := `<!DOCTYPE html>
+<html><head><title>Stdout Test</title></head><body>
+<article>
+<h1>Stdout Test</h1>
+<p>This is a test article that will be written to stdout. It has enough
+content for readability to extract it as the main article properly.</p>
+<p>Another paragraph for the readability algorithm threshold.</p>
+</article>
+</body></html>`
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.Write([]byte(pageHTML))
+	}))
+	defer srv.Close()
+
+	// No output file - goes to stdout
+	cfg := cliConfig{
+		opts:      optimizeOpts{maxWidth: 800, quality: 60},
+		timeout:   5 * time.Second,
+		userAgent: "test-agent",
+		args:      []string{srv.URL},
+	}
+
+	// Redirect stdout for this test
+	err := run(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestRun_EpubMode(t *testing.T) {
+	pageHTML := `<!DOCTYPE html>
+<html><head><title>Epub Test</title></head><body>
+<article>
+<h1>Epub Test</h1>
+<p>This is a test article for epub mode. It has enough content for
+readability to extract it as the main article content. More text here.</p>
+<p>Second paragraph with additional content for the readability algorithm.</p>
+</article>
+</body></html>`
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.Write([]byte(pageHTML))
+	}))
+	defer srv.Close()
+
+	outFile := filepath.Join(t.TempDir(), "test.epub")
+	cfg := cliConfig{
+		opts:      optimizeOpts{maxWidth: 800, quality: 60},
+		output:    outFile,
+		timeout:   5 * time.Second,
+		userAgent: "test-agent",
+		epubMode:  true,
+		args:      []string{srv.URL},
+	}
+
+	err := run(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	info, err := os.Stat(outFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Size() < 100 {
+		t.Error("epub file too small")
+	}
+}
+
+func TestRun_EpubMode_WithTxtFile(t *testing.T) {
+	pageHTML := `<!DOCTYPE html>
+<html><head><title>TXT Test</title></head><body>
+<article>
+<h1>TXT Test</h1>
+<p>This is a test article loaded via a txt file. It has enough content
+for readability to work with. More padding text for the algorithm.</p>
+<p>Additional paragraph for content density threshold.</p>
+</article>
+</body></html>`
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.Write([]byte(pageHTML))
+	}))
+	defer srv.Close()
+
+	tmpDir := t.TempDir()
+	urlFile := filepath.Join(tmpDir, "reading-list.txt")
+	os.WriteFile(urlFile, []byte(srv.URL+"\n"), 0644)
+
+	outFile := filepath.Join(tmpDir, "test.epub")
+	cfg := cliConfig{
+		opts:      optimizeOpts{maxWidth: 800, quality: 60},
+		output:    outFile,
+		timeout:   5 * time.Second,
+		userAgent: "test-agent",
+		epubMode:  true,
+		args:      []string{urlFile},
+	}
+
+	err := run(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	info, err := os.Stat(outFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Size() < 100 {
+		t.Error("epub file too small")
+	}
+}
+
+func TestRun_EpubMode_MultipleArticles(t *testing.T) {
+	articles := []string{
+		`<!DOCTYPE html><html><head><title>Article One</title></head><body>
+		<article><h1>Article One</h1>
+		<p>First article content for multi-article epub test. It has enough content
+		for readability to properly extract the main content region.</p>
+		<p>Second paragraph for content density.</p></article></body></html>`,
+		`<!DOCTYPE html><html><head><title>Article Two</title></head><body>
+		<article><h1>Article Two</h1>
+		<p>Second article content for multi-article epub test. More content needed
+		for readability to extract this as the main article properly.</p>
+		<p>Additional paragraph for the algorithm.</p></article></body></html>`,
+	}
+	idx := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		if idx < len(articles) {
+			w.Write([]byte(articles[idx]))
+			idx++
+		} else {
+			w.Write([]byte(articles[0]))
+		}
+	}))
+	defer srv.Close()
+
+	outFile := filepath.Join(t.TempDir(), "multi.epub")
+	cfg := cliConfig{
+		opts:          optimizeOpts{maxWidth: 800, quality: 60},
+		output:        outFile,
+		titleOverride: "Multi Book",
+		timeout:       5 * time.Second,
+		userAgent:     "test-agent",
+		epubMode:      true,
+		args:          []string{srv.URL + "/1", srv.URL + "/2"},
+	}
+
+	err := run(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestRun_EpubMode_NoOutput(t *testing.T) {
+	cfg := cliConfig{
+		opts:     optimizeOpts{maxWidth: 800, quality: 60},
+		epubMode: true,
+		args:     []string{"https://example.com"},
+	}
+	err := run(cfg)
+	if err == nil {
+		t.Error("expected error when epub mode has no output")
+	}
+}
+
+func TestRun_EpubMode_NoArgs(t *testing.T) {
+	cfg := cliConfig{
+		opts:     optimizeOpts{maxWidth: 800, quality: 60},
+		output:   "out.epub",
+		epubMode: true,
+		args:     []string{},
+	}
+	err := run(cfg)
+	if err == nil {
+		t.Error("expected error when epub mode has no args")
+	}
+}
+
+func TestRun_SingleMode_NoArgs(t *testing.T) {
+	cfg := cliConfig{
+		opts: optimizeOpts{maxWidth: 800, quality: 60},
+		args: []string{},
+	}
+	err := run(cfg)
+	if err == nil {
+		t.Error("expected error when single mode has no args")
+	}
+}
+
+func TestRun_SingleMode_TooManyArgs(t *testing.T) {
+	cfg := cliConfig{
+		opts: optimizeOpts{maxWidth: 800, quality: 60},
+		args: []string{"url1", "url2"},
+	}
+	err := run(cfg)
+	if err == nil {
+		t.Error("expected error when single mode has too many args")
 	}
 }
 

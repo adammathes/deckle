@@ -77,3 +77,43 @@ func TestExtractArticle_PreservesDataURIs(t *testing.T) {
 		t.Error("expected data URI to be preserved in article content")
 	}
 }
+
+func TestExtractArticle_EmptyContent(t *testing.T) {
+	// Minimal HTML that readability can't extract meaningful content from
+	html := `<html><head><title>Empty</title></head><body></body></html>`
+	u, _ := url.Parse("https://example.com/empty")
+	_, _, err := extractArticle([]byte(html), u)
+	if err == nil {
+		t.Error("expected error for empty content")
+	}
+	if err != nil && !strings.Contains(err.Error(), "no content") {
+		t.Errorf("expected 'no content' error, got: %v", err)
+	}
+}
+
+func TestExtractArticle_WithMetadata(t *testing.T) {
+	html := `<html><head>
+		<title>Metadata Test</title>
+		<meta name="author" content="John Doe">
+		<meta property="og:site_name" content="Test Site">
+	</head><body>
+		<article>
+			<h1>Metadata Test</h1>
+			<p>This article tests metadata extraction. It has enough content for
+			readability to identify it as the main article. More text is needed
+			to ensure the algorithm works correctly and finds this as main content.</p>
+			<p>Second paragraph with additional content to boost the text density.
+			The readability algorithm uses content length as one of its signals.
+			Having substantial text helps it identify the main article region.</p>
+		</article>
+	</body></html>`
+
+	u, _ := url.Parse("https://example.com/article")
+	_, meta, err := extractArticle([]byte(html), u)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(meta.Title, "Metadata Test") {
+		t.Errorf("title = %q, expected to contain 'Metadata Test'", meta.Title)
+	}
+}

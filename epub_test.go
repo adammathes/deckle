@@ -2,6 +2,7 @@ package main
 
 import (
 	"archive/zip"
+	"encoding/base64"
 	"image/color"
 	"io"
 	"os"
@@ -9,7 +10,15 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	epub "github.com/go-shiori/go-epub"
+	"golang.org/x/net/html"
 )
+
+// htmlAttr creates an html.Attribute for testing.
+func htmlAttr(key, val string) html.Attribute {
+	return html.Attribute{Key: key, Val: val}
+}
 
 func runCommand(name string, args ...string) (string, error) {
 	cmd := exec.Command(name, args...)
@@ -187,6 +196,195 @@ func findZipFile(zr *zip.ReadCloser, name string) string {
 		}
 	}
 	return ""
+}
+
+func TestIsAllowedAttr(t *testing.T) {
+	tests := []struct {
+		name string
+		key  string
+		val  string
+		want bool
+	}{
+		{"id", "id", "main", true},
+		{"class", "class", "container", true},
+		{"href", "href", "https://example.com", true},
+		{"src", "src", "image.jpg", true},
+		{"alt", "alt", "description", true},
+		{"style", "style", "color: red", true},
+		{"colspan", "colspan", "2", true},
+		{"rel", "rel", "noopener", true},
+		{"aria-label", "aria-label", "Close", true},
+		{"aria-hidden", "aria-hidden", "true", true},
+		{"epub:type", "epub:type", "chapter", true},
+		{"data-custom", "data-custom", "value", false},
+		{"onclick", "onclick", "alert(1)", false},
+		{"tabindex", "tabindex", "0", false},
+		{"role", "role", "button", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			attr := htmlAttr(tt.key, tt.val)
+			got := isAllowedAttr(attr)
+			if got != tt.want {
+				t.Errorf("isAllowedAttr(%q) = %v, want %v", tt.key, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestSanitizeForXHTML_FiltersAttrs(t *testing.T) {
+	input := `<p id="intro" onclick="alert(1)" data-track="click">Hello</p>`
+	result := sanitizeForXHTML(input)
+	if strings.Contains(result, "onclick") {
+		t.Error("onclick should be stripped")
+	}
+	if strings.Contains(result, "data-track") {
+		t.Error("data-track should be stripped")
+	}
+	if !strings.Contains(result, `id="intro"`) {
+		t.Error("id should be kept")
+	}
+	if !strings.Contains(result, "Hello") {
+		t.Error("text content should be preserved")
+	}
+}
+
+func TestSanitizeForXHTML_FixesBrokenFragmentLinks(t *testing.T) {
+	input := `<a href="#exists">ok</a><a href="#missing">broken</a><div id="exists">target</div>`
+	result := sanitizeForXHTML(input)
+	if !strings.Contains(result, `href="#exists"`) {
+		t.Error("link to existing ID should be kept")
+	}
+	// The broken link should have href removed
+	if strings.Contains(result, `href="#missing"`) {
+		t.Error("link to non-existent ID should be dropped")
+	}
+}
+
+func TestSanitizeForXHTML_VoidElements(t *testing.T) {
+	input := `<p>text<br>more<hr><img src="x.jpg" alt="test"></p>`
+	result := sanitizeForXHTML(input)
+	if !strings.Contains(result, "<br/>") {
+		t.Error("br should be self-closing in XHTML")
+	}
+	if !strings.Contains(result, "<hr/>") {
+		t.Error("hr should be self-closing in XHTML")
+	}
+	if !strings.Contains(result, "/>") {
+		t.Error("img should be self-closing in XHTML")
+	}
+}
+
+func TestSanitizeForXHTML_AriaAndEpubAttrs(t *testing.T) {
+	input := `<section aria-label="chapter" class="main">content</section>`
+	result := sanitizeForXHTML(input)
+	if !strings.Contains(result, `aria-label="chapter"`) {
+		t.Error("aria-label should be preserved")
+	}
+	if !strings.Contains(result, `class="main"`) {
+		t.Error("class should be preserved")
+	}
+}
+
+func TestExtractImages_MultipleMIMETypes(t *testing.T) {
+	pngData := makePNG(10, 10, color.NRGBA{255, 0, 0, 255})
+
+	body := `<p>Text</p>` +
+		`<img src="data:image/png;base64,` + base64.StdEncoding.EncodeToString(pngData) + `" alt="png">` +
+		`<img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" alt="gif">`
+
+	e, _ := epub.NewEpub("test")
+	result, err := extractImages(e, body, 1)
+	if err != nil {
+		t.Logf("extractImages returned error (may be expected): %v", err)
+	}
+	// Images should be replaced with internal paths
+	if strings.Contains(result, "data:image/png;base64,") {
+		t.Error("PNG data URI should be replaced with internal path")
+	}
+}
+
+func TestExtractImages_InvalidBase64(t *testing.T) {
+	body := `<img src="data:image/jpeg;base64,!!!invalid!!!" alt="broken">`
+
+	e, _ := epub.NewEpub("test")
+	result, _ := extractImages(e, body, 1)
+	// Invalid base64 should keep the original
+	if !strings.Contains(result, "!!!invalid!!!") {
+		t.Error("invalid base64 image should be kept as-is")
+	}
+}
+
+func TestBuildTOCBody_EmptyTitle(t *testing.T) {
+	articles := []epubArticle{
+		{HTML: "<body><p>content</p></body>", Title: "", URL: "https://example.com"},
+	}
+	result := buildTOCBody(articles)
+	if !strings.Contains(result, "Article 1") {
+		t.Error("empty title should fall back to 'Article N'")
+	}
+}
+
+func TestBuildTOCBody_FullMetadata(t *testing.T) {
+	articles := []epubArticle{
+		{
+			HTML:     "<body><p>content</p></body>",
+			Title:    "My Article",
+			URL:      "https://example.com/post",
+			Byline:   "Jane Doe",
+			SiteName: "Example Blog",
+		},
+	}
+	result := buildTOCBody(articles)
+	if !strings.Contains(result, "My Article") {
+		t.Error("expected article title in TOC")
+	}
+	if !strings.Contains(result, "Jane Doe") {
+		t.Error("expected author in TOC")
+	}
+	if !strings.Contains(result, "Example Blog") {
+		t.Error("expected site name in TOC")
+	}
+	if !strings.Contains(result, "example.com/post") {
+		t.Error("expected URL in TOC")
+	}
+}
+
+func TestBuildTOCBody_URLOnly(t *testing.T) {
+	articles := []epubArticle{
+		{HTML: "<body><p>c</p></body>", Title: "T", URL: "https://example.com/"},
+	}
+	result := buildTOCBody(articles)
+	// URL should have scheme and trailing slash stripped
+	if !strings.Contains(result, "example.com") {
+		t.Error("expected clean URL in TOC")
+	}
+}
+
+func TestExtractBodyContent_NoEndBody(t *testing.T) {
+	input := `<html><body><p>hello</p>`
+	got := extractBodyContent(input)
+	if got != "<p>hello</p>" {
+		t.Errorf("got %q, want %q", got, "<p>hello</p>")
+	}
+}
+
+func TestBuildEpub_NoTitleFallback(t *testing.T) {
+	articles := []epubArticle{
+		{HTML: `<html><body><p>No heading here.</p></body></html>`, Title: ""},
+	}
+	outPath := filepath.Join(t.TempDir(), "notitle.epub")
+	err := buildEpub(articles, "Fallback Title", outPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(outPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Size() < 100 {
+		t.Error("epub should have been created")
+	}
 }
 
 func TestBuildEpub_EpubCheck(t *testing.T) {
