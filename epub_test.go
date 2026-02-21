@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	epub "github.com/go-shiori/go-epub"
 	"golang.org/x/net/html"
@@ -326,18 +327,23 @@ func TestBuildTOCBody_EmptyTitle(t *testing.T) {
 }
 
 func TestBuildTOCBody_FullMetadata(t *testing.T) {
+	pubDate := time.Date(2024, time.March, 15, 0, 0, 0, 0, time.UTC)
 	articles := []epubArticle{
 		{
-			HTML:     "<body><p>content</p></body>",
-			Title:    "My Article",
-			URL:      "https://example.com/post",
-			Byline:   "Jane Doe",
-			SiteName: "Example Blog",
+			HTML:          "<body><p>content</p></body>",
+			Title:         "My Article",
+			URL:           "https://example.com/post",
+			Byline:        "Jane Doe",
+			SiteName:      "Example Blog",
+			PublishedTime: &pubDate,
 		},
 	}
 	result := buildTOCBody(articles)
 	if !strings.Contains(result, "My Article") {
 		t.Error("expected article title in TOC")
+	}
+	if !strings.Contains(result, "March 15, 2024") {
+		t.Error("expected published date in TOC")
 	}
 	if !strings.Contains(result, "Jane Doe") {
 		t.Error("expected author in TOC")
@@ -347,6 +353,24 @@ func TestBuildTOCBody_FullMetadata(t *testing.T) {
 	}
 	if !strings.Contains(result, "example.com/post") {
 		t.Error("expected URL in TOC")
+	}
+}
+
+func TestBuildTOCBody_DateOnly(t *testing.T) {
+	pubDate := time.Date(2023, time.December, 1, 0, 0, 0, 0, time.UTC)
+	articles := []epubArticle{
+		{
+			HTML:          "<body><p>content</p></body>",
+			Title:         "Dated Article",
+			PublishedTime: &pubDate,
+		},
+	}
+	result := buildTOCBody(articles)
+	if !strings.Contains(result, "December 1, 2023") {
+		t.Error("expected published date in TOC")
+	}
+	if !strings.Contains(result, "toc-meta") {
+		t.Error("expected metadata paragraph when date is present")
 	}
 }
 

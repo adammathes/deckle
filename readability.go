@@ -4,15 +4,17 @@ import (
 	"bytes"
 	"fmt"
 	"net/url"
+	"time"
 
 	readability "codeberg.org/readeck/go-readability"
 )
 
 // articleMeta holds metadata extracted alongside the article content.
 type articleMeta struct {
-	Title    string
-	Byline   string // Author attribution (e.g. "Steve Yegge")
-	SiteName string // Publication name (e.g. "Medium")
+	Title         string
+	Byline        string     // Author attribution (e.g. "Steve Yegge")
+	SiteName      string     // Publication name (e.g. "Medium")
+	PublishedTime *time.Time // Publication date, if available
 }
 
 // extractArticle runs go-readability on the HTML and returns the article
@@ -28,9 +30,10 @@ func extractArticle(htmlBytes []byte, pageURL *url.URL) (content string, meta ar
 	}
 
 	meta = articleMeta{
-		Title:    article.Title,
-		Byline:   article.Byline,
-		SiteName: article.SiteName,
+		Title:         article.Title,
+		Byline:        article.Byline,
+		SiteName:      article.SiteName,
+		PublishedTime: article.PublishedTime,
 	}
 	return article.Content, meta, nil
 }

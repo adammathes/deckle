@@ -3,6 +3,7 @@ package main
 import (
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestExtractTitle_FromTitleTag(t *testing.T) {
@@ -225,5 +226,36 @@ func TestFormatByline_Empty(t *testing.T) {
 	result := formatByline(sourceInfo{})
 	if result != "" {
 		t.Errorf("expected empty string for empty sourceInfo, got %q", result)
+	}
+}
+
+func TestFormatByline_WithDate(t *testing.T) {
+	pubDate := time.Date(2024, time.June, 10, 0, 0, 0, 0, time.UTC)
+	src := sourceInfo{
+		Byline:        "Jane Doe",
+		SiteName:      "Tech Blog",
+		PublishedTime: &pubDate,
+	}
+	result := formatByline(src)
+	if !strings.Contains(result, "June 10, 2024") {
+		t.Error("expected published date in byline")
+	}
+	if !strings.Contains(result, "Jane Doe") {
+		t.Error("expected author in byline")
+	}
+	if !strings.Contains(result, "Tech Blog") {
+		t.Error("expected site name in byline")
+	}
+}
+
+func TestFormatByline_DateOnly(t *testing.T) {
+	pubDate := time.Date(2023, time.January, 5, 0, 0, 0, 0, time.UTC)
+	src := sourceInfo{PublishedTime: &pubDate}
+	result := formatByline(src)
+	if !strings.Contains(result, "January 5, 2023") {
+		t.Error("expected published date in byline")
+	}
+	if !strings.Contains(result, `class="byline"`) {
+		t.Error("expected byline paragraph when date is present")
 	}
 }

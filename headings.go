@@ -6,6 +6,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 )
 
 var (
@@ -67,9 +68,10 @@ func shiftHeadings(text string) string {
 
 // sourceInfo holds attribution info for an article.
 type sourceInfo struct {
-	URL      string // Original article URL
-	Byline   string // Author name from metadata
-	SiteName string // Site/publication name from metadata
+	URL           string     // Original article URL
+	Byline        string     // Author name from metadata
+	SiteName      string     // Site/publication name from metadata
+	PublishedTime *time.Time // Publication date, if available
 }
 
 // formatByline builds a byline HTML paragraph from the source info.
@@ -77,6 +79,9 @@ type sourceInfo struct {
 func formatByline(src sourceInfo) string {
 	var parts []string
 
+	if src.PublishedTime != nil {
+		parts = append(parts, html.EscapeString(src.PublishedTime.Format("January 2, 2006")))
+	}
 	if src.Byline != "" {
 		parts = append(parts, html.EscapeString(src.Byline))
 	}

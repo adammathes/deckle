@@ -9,6 +9,7 @@ import (
 	gohtml "html"
 	"regexp"
 	"strings"
+	"time"
 
 	epub "github.com/go-shiori/go-epub"
 	"golang.org/x/net/html"
@@ -24,11 +25,12 @@ var (
 
 // epubArticle holds a processed article and its metadata for epub inclusion.
 type epubArticle struct {
-	HTML     string // Full HTML (with <body> tags)
-	Title    string // Cleaned article title
-	URL      string // Original source URL
-	Byline   string // Author name from metadata
-	SiteName string // Publication name from metadata
+	HTML          string     // Full HTML (with <body> tags)
+	Title         string     // Cleaned article title
+	URL           string     // Original source URL
+	Byline        string     // Author name from metadata
+	SiteName      string     // Publication name from metadata
+	PublishedTime *time.Time // Publication date, if available
 }
 
 // extractBodyContent extracts the content between <body> and </body> tags.
@@ -274,8 +276,11 @@ func buildTOCBody(articles []epubArticle) string {
 		b.WriteString(fmt.Sprintf(`<a href="%s">%s</a>`, filename, gohtml.EscapeString(title)))
 		b.WriteByte('\n')
 
-		// Build metadata line: author · site · url
+		// Build metadata line: date · author · site · url
 		var meta []string
+		if a.PublishedTime != nil {
+			meta = append(meta, gohtml.EscapeString(a.PublishedTime.Format("January 2, 2006")))
+		}
 		if a.Byline != "" {
 			meta = append(meta, gohtml.EscapeString(a.Byline))
 		}
