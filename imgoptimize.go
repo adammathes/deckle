@@ -15,7 +15,6 @@ import (
 	"io"
 	"math"
 	"net/http"
-	"os"
 	"regexp"
 	"strings"
 	"time"
@@ -144,7 +143,7 @@ func optimizeImage(data []byte, mime string, opts optimizeOpts) (string, int) {
 
 	img, _, err := image.Decode(bytes.NewReader(data))
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Warning: could not decode image (%s): %v\n", mime, err)
+		fmt.Fprintf(logOut, "Warning: could not decode image (%s): %v\n", mime, err)
 		return "", 0
 	}
 
@@ -171,7 +170,7 @@ func optimizeImage(data []byte, mime string, opts optimizeOpts) (string, int) {
 
 	var buf bytes.Buffer
 	if err := jpeg.Encode(&buf, encImg, &jpeg.Options{Quality: opts.quality}); err != nil {
-		fmt.Fprintf(os.Stderr, "Warning: JPEG encode failed: %v\n", err)
+		fmt.Fprintf(logOut, "Warning: JPEG encode failed: %v\n", err)
 		return "", 0
 	}
 
@@ -253,18 +252,18 @@ func fetchAndEmbed(html []byte) []byte {
 
 		resp, err := getImageClient().Get(url)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "Warning: could not fetch %s: %v\n", url, err)
+			fmt.Fprintf(logOut, "Warning: could not fetch %s: %v\n", url, err)
 			return match
 		}
 		defer resp.Body.Close()
 		if resp.StatusCode != 200 {
-			fmt.Fprintf(os.Stderr, "Warning: HTTP %d for %s\n", resp.StatusCode, url)
+			fmt.Fprintf(logOut, "Warning: HTTP %d for %s\n", resp.StatusCode, url)
 			return match
 		}
 
 		data, err := io.ReadAll(resp.Body)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "Warning: could not read %s: %v\n", url, err)
+			fmt.Fprintf(logOut, "Warning: could not read %s: %v\n", url, err)
 			return match
 		}
 
@@ -295,7 +294,7 @@ func fetchAndEmbed(html []byte) []byte {
 	})
 
 	if fetched > 0 {
-		fmt.Fprintf(os.Stderr, "Fetched and embedded %d external images\n", fetched)
+		fmt.Fprintf(logOut, "Fetched and embedded %d external images\n", fetched)
 	}
 	return html
 }
@@ -320,7 +319,7 @@ func decodeBase64(s string) ([]byte, error) {
 func tryOptimizeDataURI(mime, b64data string, opts optimizeOpts, st *stats) string {
 	raw, err := decodeBase64(b64data)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Warning: broken base64, skipping: %v\n", err)
+		fmt.Fprintf(logOut, "Warning: broken base64, skipping: %v\n", err)
 		return ""
 	}
 
@@ -463,7 +462,7 @@ func processArticleImages(html []byte, opts optimizeOpts) []byte {
 		if imgURL != "" {
 			data, mime, err := fetchImage(imgURL)
 			if err != nil {
-				fmt.Fprintf(os.Stderr, "Warning: could not fetch picture image %s: %v\n", imgURL, err)
+				fmt.Fprintf(logOut, "Warning: could not fetch picture image %s: %v\n", imgURL, err)
 				return match
 			}
 
@@ -507,10 +506,10 @@ func processArticleImages(html []byte, opts optimizeOpts) []byte {
 	})
 
 	if st.count > 0 {
-		fmt.Fprintf(os.Stderr, "Optimized %d images: %s → %s\n",
+		fmt.Fprintf(logOut, "Optimized %d images: %s → %s\n",
 			st.count, humanSize(st.originalTotal), humanSize(st.optimizedTotal))
 	} else {
-		fmt.Fprintln(os.Stderr, "No optimizable images found.")
+		fmt.Fprintln(logOut, "No optimizable images found.")
 	}
 
 	// Cleanup for epub validity
