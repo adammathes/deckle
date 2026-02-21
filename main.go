@@ -48,9 +48,10 @@ func processURL(rawURL string, opts optimizeOpts, timeout time.Duration, userAge
 	}
 
 	src := sourceInfo{
-		URL:      rawURL,
-		Byline:   meta.Byline,
-		SiteName: meta.SiteName,
+		URL:           rawURL,
+		Byline:        meta.Byline,
+		SiteName:      meta.SiteName,
+		PublishedTime: meta.PublishedTime,
 	}
 	final := normalizeHeadings(string(result), finalTitle, src)
 
@@ -159,11 +160,12 @@ func run(cfg cliConfig) error {
 		for _, r := range results {
 			if r.ok {
 				articles = append(articles, epubArticle{
-					HTML:     r.html,
-					Title:    r.title,
-					URL:      r.src.URL,
-					Byline:   r.src.Byline,
-					SiteName: r.src.SiteName,
+					HTML:          r.html,
+					Title:         r.title,
+					URL:           r.src.URL,
+					Byline:        r.src.Byline,
+					SiteName:      r.src.SiteName,
+					PublishedTime: r.src.PublishedTime,
 				})
 			}
 		}
