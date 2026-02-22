@@ -74,7 +74,7 @@ func TestFullPipeline(t *testing.T) {
 
 	// Step 4: Process images
 	opts := optimizeOpts{maxWidth: 800, quality: 60, grayscale: true}
-	result := processArticleImages([]byte(content), opts)
+	result := processArticleImages([]byte(content), opts, 5)
 
 	// Step 5: Normalize headings
 	final := normalizeHeadings(string(result), meta.Title, sourceInfo{})
@@ -257,7 +257,7 @@ The article needs substantial text to be recognized properly.</p>
 	defer srv.Close()
 
 	opts := optimizeOpts{maxWidth: 800, quality: 60}
-	html, title, src, err := processURL(srv.URL, opts, 5*time.Second, "test-agent", "")
+	html, title, src, err := processURL(srv.URL, opts, 5*time.Second, "test-agent", "", 5)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -291,7 +291,7 @@ this is the main article content region of the page.</p>
 	defer srv.Close()
 
 	opts := optimizeOpts{maxWidth: 800, quality: 60}
-	_, title, _, err := processURL(srv.URL, opts, 5*time.Second, "test-agent", "Custom Title")
+	_, title, _, err := processURL(srv.URL, opts, 5*time.Second, "test-agent", "Custom Title", 5)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -302,7 +302,7 @@ this is the main article content region of the page.</p>
 
 func TestProcessURL_FetchError(t *testing.T) {
 	opts := optimizeOpts{maxWidth: 800, quality: 60}
-	_, _, _, err := processURL("http://localhost:1/nonexistent", opts, 1*time.Second, "test-agent", "")
+	_, _, _, err := processURL("http://localhost:1/nonexistent", opts, 1*time.Second, "test-agent", "", 5)
 	if err == nil {
 		t.Error("expected error for unreachable URL")
 	}
@@ -468,26 +468,24 @@ for readability to work with. More padding text for the algorithm.</p>
 }
 
 func TestRun_EpubMode_MultipleArticles(t *testing.T) {
-	articles := []string{
-		`<!DOCTYPE html><html><head><title>Article One</title></head><body>
+	articlesByPath := map[string]string{
+		"/1": `<!DOCTYPE html><html><head><title>Article One</title></head><body>
 		<article><h1>Article One</h1>
 		<p>First article content for multi-article epub test. It has enough content
 		for readability to properly extract the main content region.</p>
 		<p>Second paragraph for content density.</p></article></body></html>`,
-		`<!DOCTYPE html><html><head><title>Article Two</title></head><body>
+		"/2": `<!DOCTYPE html><html><head><title>Article Two</title></head><body>
 		<article><h1>Article Two</h1>
 		<p>Second article content for multi-article epub test. More content needed
 		for readability to extract this as the main article properly.</p>
 		<p>Additional paragraph for the algorithm.</p></article></body></html>`,
 	}
-	idx := 0
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		if idx < len(articles) {
-			w.Write([]byte(articles[idx]))
-			idx++
+		if html, ok := articlesByPath[r.URL.Path]; ok {
+			w.Write([]byte(html))
 		} else {
-			w.Write([]byte(articles[0]))
+			w.WriteHeader(404)
 		}
 	}))
 	defer srv.Close()
