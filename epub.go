@@ -3,10 +3,13 @@
 package main
 
 import (
+	"archive/zip"
 	"bytes"
 	"encoding/base64"
 	"fmt"
 	gohtml "html"
+	"io"
+	"os"
 	"regexp"
 	"strings"
 	"time"
@@ -314,6 +317,77 @@ func buildTOCBody(articles []epubArticle) string {
 	return b.String()
 }
 
+// stripLinkTypeAttr removes type="text/css" from <link> elements in XHTML.
+// In EPUB3, text/css is the default and the type attribute is redundant;
+// epubcheck warns when it sees epub:type values that aren't structural
+// semantics, and some versions conflate this with the type attr on <link>.
+var linkTypeAttrRe = regexp.MustCompile(` type="text/css"`)
+
+// fixEpubCompliance post-processes the generated EPUB ZIP file to remove
+// known compliance issues that are artifacts of the go-epub library:
+//   - strips type="text/css" from <link> elements in XHTML files (HTM-015)
+func fixEpubCompliance(path string) error {
+	// Read the entire zip into memory so we can rewrite it.
+	r, err := zip.OpenReader(path)
+	if err != nil {
+		return fmt.Errorf("opening epub: %w", err)
+	}
+	defer r.Close()
+
+	tmp := path + ".fix"
+	out, err := os.Create(tmp)
+	if err != nil {
+		return fmt.Errorf("creating temp file: %w", err)
+	}
+
+	zw := zip.NewWriter(out)
+	for _, f := range r.File {
+		rc, err := f.Open()
+		if err != nil {
+			out.Close()
+			os.Remove(tmp)
+			return fmt.Errorf("reading %s: %w", f.Name, err)
+		}
+		content, err := io.ReadAll(rc)
+		rc.Close()
+		if err != nil {
+			out.Close()
+			os.Remove(tmp)
+			return fmt.Errorf("reading content of %s: %w", f.Name, err)
+		}
+
+		if strings.HasSuffix(f.Name, ".xhtml") {
+			content = linkTypeAttrRe.ReplaceAll(content, nil)
+		}
+
+		// Preserve the original header (compression method, timestamps, etc.)
+		fh := f.FileHeader
+		fw, err := zw.CreateHeader(&fh)
+		if err != nil {
+			out.Close()
+			os.Remove(tmp)
+			return fmt.Errorf("creating entry %s: %w", f.Name, err)
+		}
+		if _, err := fw.Write(content); err != nil {
+			out.Close()
+			os.Remove(tmp)
+			return fmt.Errorf("writing entry %s: %w", f.Name, err)
+		}
+	}
+
+	if err := zw.Close(); err != nil {
+		out.Close()
+		os.Remove(tmp)
+		return fmt.Errorf("closing zip writer: %w", err)
+	}
+	if err := out.Close(); err != nil {
+		os.Remove(tmp)
+		return fmt.Errorf("closing temp file: %w", err)
+	}
+
+	return os.Rename(tmp, path)
+}
+
 // buildEpub creates an epub3 file from a list of articles with metadata.
 // It generates a front matter table of contents followed by the article sections.
 func buildEpub(articles []epubArticle, title string, outputPath string) error {
@@ -322,7 +396,6 @@ func buildEpub(articles []epubArticle, title string, outputPath string) error {
 		return fmt.Errorf("creating epub: %w", err)
 	}
 	e.SetLang("en")
-	e.SetAuthor("deckle")
 
 	// Add minimal CSS for readability on e-readers
 	css := `body { margin: 1em; line-height: 1.5; }
@@ -374,6 +447,11 @@ blockquote { margin-left: 1em; padding-left: 0.5em; border-left: 2px solid #999;
 
 	if err := e.Write(outputPath); err != nil {
 		return fmt.Errorf("writing epub: %w", err)
+	}
+
+	if err := fixEpubCompliance(outputPath); err != nil {
+		// Non-fatal: log and continue with the original file.
+		fmt.Fprintf(logOut, "Warning: could not post-process epub for compliance: %v\n", err)
 	}
 
 	return nil

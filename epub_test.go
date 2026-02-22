@@ -411,6 +411,81 @@ func TestBuildEpub_NoTitleFallback(t *testing.T) {
 	}
 }
 
+func TestFixEpubCompliance_RemovesLinkTypeAttr(t *testing.T) {
+	// Build a minimal epub and verify fixEpubCompliance strips type="text/css"
+	// from link elements (the go-epub library always adds this attribute, which
+	// triggers epubcheck HTM-015 warnings).
+	articles := []epubArticle{
+		{HTML: `<html><body><h1>Test</h1><p>content</p></body></html>`, Title: "Test"},
+	}
+	outPath := filepath.Join(t.TempDir(), "compliance.epub")
+	if err := buildEpub(articles, "Compliance Test", outPath); err != nil {
+		t.Fatal(err)
+	}
+
+	zr, err := zip.OpenReader(outPath)
+	if err != nil {
+		t.Fatalf("opening epub zip: %v", err)
+	}
+	defer zr.Close()
+
+	for _, f := range zr.File {
+		if !strings.HasSuffix(f.Name, ".xhtml") {
+			continue
+		}
+		rc, err := f.Open()
+		if err != nil {
+			t.Fatalf("opening %s: %v", f.Name, err)
+		}
+		content, err := io.ReadAll(rc)
+		rc.Close()
+		if err != nil {
+			t.Fatalf("reading %s: %v", f.Name, err)
+		}
+		if strings.Contains(string(content), `type="text/css"`) {
+			t.Errorf("%s still contains type=\"text/css\" after compliance fix", f.Name)
+		}
+	}
+}
+
+func TestBuildEpub_NoCreatorRefines(t *testing.T) {
+	// The go-epub library's SetAuthor generates a <meta refines="#creator">
+	// that epubcheck flags as OPF-037 when the dc:creator id isn't found.
+	// Verify we don't produce that broken reference by not calling SetAuthor.
+	articles := []epubArticle{
+		{HTML: `<html><body><h1>Test</h1><p>content</p></body></html>`, Title: "Test"},
+	}
+	outPath := filepath.Join(t.TempDir(), "norefstest.epub")
+	if err := buildEpub(articles, "NoRefs Test", outPath); err != nil {
+		t.Fatal(err)
+	}
+
+	zr, err := zip.OpenReader(outPath)
+	if err != nil {
+		t.Fatalf("opening epub zip: %v", err)
+	}
+	defer zr.Close()
+
+	for _, f := range zr.File {
+		if f.Name != "EPUB/package.opf" {
+			continue
+		}
+		rc, err := f.Open()
+		if err != nil {
+			t.Fatalf("opening opf: %v", err)
+		}
+		content, err := io.ReadAll(rc)
+		rc.Close()
+		if err != nil {
+			t.Fatalf("reading opf: %v", err)
+		}
+		opf := string(content)
+		if strings.Contains(opf, `refines="#creator"`) {
+			t.Error("OPF contains refines=\"#creator\" which causes epubcheck OPF-037")
+		}
+	}
+}
+
 func TestBuildEpub_EpubCheck(t *testing.T) {
 	// Only run if epubcheck is available
 	if _, err := os.Stat("/usr/bin/epubcheck"); err != nil {
