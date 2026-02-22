@@ -768,3 +768,81 @@ func TestProcessArticleImages_NoImages(t *testing.T) {
 		t.Error("text content should be preserved")
 	}
 }
+
+// --- size limit tests for image fetching ---
+
+func TestFetchOneImage_ExceedsSizeLimit(t *testing.T) {
+	saved := maxResponseBytes
+	defer func() { maxResponseBytes = saved }()
+	maxResponseBytes = 50 // very small limit
+
+	// Server sends a large image
+	imgData := makePNG(200, 200, color.NRGBA{255, 0, 0, 255})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "image/png")
+		w.Write(imgData)
+	}))
+	defer srv.Close()
+
+	savedClient := fetchImageClient
+	fetchImageClient = srv.Client()
+	defer func() { fetchImageClient = savedClient }()
+
+	mime, encoded := fetchOneImage(srv.URL + "/big.png")
+	if mime != "" || encoded != "" {
+		t.Error("expected empty result when image exceeds size limit")
+	}
+}
+
+func TestFetchImage_ExceedsSizeLimit(t *testing.T) {
+	saved := maxResponseBytes
+	defer func() { maxResponseBytes = saved }()
+	maxResponseBytes = 50
+
+	imgData := makePNG(200, 200, color.NRGBA{0, 255, 0, 255})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "image/png")
+		w.Write(imgData)
+	}))
+	defer srv.Close()
+
+	savedClient := fetchImageClient
+	fetchImageClient = srv.Client()
+	defer func() { fetchImageClient = savedClient }()
+
+	_, _, err := fetchImage(srv.URL + "/big.png")
+	if err == nil {
+		t.Fatal("expected error when image exceeds size limit")
+	}
+	if !strings.Contains(err.Error(), "exceeds maximum allowed size") {
+		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+func TestFetchAndEmbed_ExceedsSizeLimit(t *testing.T) {
+	saved := maxResponseBytes
+	defer func() { maxResponseBytes = saved }()
+	maxResponseBytes = 50
+
+	imgData := makePNG(200, 200, color.NRGBA{0, 0, 255, 255})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "image/png")
+		w.Write(imgData)
+	}))
+	defer srv.Close()
+
+	savedClient := fetchImageClient
+	fetchImageClient = srv.Client()
+	defer func() { fetchImageClient = savedClient }()
+
+	html := []byte(`<img src="` + srv.URL + `/big.png" alt="test">`)
+	result := fetchAndEmbed(html, 5)
+
+	// Image should NOT be embedded (too large), original URL kept
+	if strings.Contains(string(result), "data:image/png;base64,") {
+		t.Error("oversized image should not be embedded")
+	}
+	if !strings.Contains(string(result), srv.URL) {
+		t.Error("original URL should be preserved when image exceeds limit")
+	}
+}

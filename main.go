@@ -241,6 +241,7 @@ func main() {
 	userAgent := flag.String("user-agent", defaultUA, "HTTP User-Agent header")
 	epubMode := flag.Bool("epub", false, "Generate epub (requires -o, accepts multiple URLs or a .txt file)")
 	concurrency := flag.Int("concurrency", 5, "Max concurrent downloads for articles and images")
+	maxRespSize := flag.Int64("max-response-size", 128*1024*1024, "Maximum allowed HTTP response size in bytes (0 for unlimited)")
 	silent := flag.Bool("silent", false, "Suppress all output except errors (for pipeline use)")
 	flag.Usage = func() {
 		fmt.Fprintf(os.Stderr, "Usage: deckle [options] <URL>\n")
@@ -253,6 +254,8 @@ func main() {
 	if *silent {
 		logOut = io.Discard
 	}
+
+	maxResponseBytes = *maxRespSize
 
 	conc := *concurrency
 	if conc < 1 {
