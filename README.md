@@ -60,13 +60,16 @@ deckle -grayscale -o article.html https://example.com/article
 ## Options
 
 ```
-  -epub              Generate epub (requires -o)
-  -max-width INT     Max image pixel width (default: 800)
-  -quality INT       JPEG quality 1-95 (default: 60)
-  -grayscale         Convert images to grayscale
-  -title STRING      Override article/book title
-  -o FILE            Output file (default: stdout)
-  -timeout DURATION  HTTP fetch timeout (default: 30s)
+  -epub                 Generate epub (requires -o)
+  -max-width INT        Max image pixel width (default: 800)
+  -quality INT          JPEG quality 1-95 (default: 60)
+  -grayscale            Convert images to grayscale
+  -title STRING         Override article/book title
+  -o FILE               Output file (default: stdout)
+  -timeout DURATION     HTTP fetch timeout (default: 30s)
+  -user-agent STRING    HTTP User-Agent header
+  -concurrency INT      Max concurrent downloads for articles and images (default: 5)
+  -silent               Suppress all output except errors (for pipeline use)
 ```
 
 ## Origin 
