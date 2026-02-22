@@ -12,7 +12,6 @@ import (
 	"image/gif"
 	"image/jpeg"
 	_ "image/png"
-	"io"
 	"math"
 	"net/http"
 	"regexp"
@@ -205,7 +204,7 @@ func fetchOneImage(imgURL string) (mime, encoded string) {
 		return "", ""
 	}
 
-	data, err := io.ReadAll(resp.Body)
+	data, err := readLimited(resp.Body, maxResponseBytes)
 	if err != nil {
 		fmt.Fprintf(logOut, "Warning: could not read %s: %v\n", imgURL, err)
 		return "", ""
@@ -337,7 +336,7 @@ func fetchImage(imgURL string) ([]byte, string, error) {
 		return nil, "", fmt.Errorf("HTTP %d", resp.StatusCode)
 	}
 
-	data, err := io.ReadAll(resp.Body)
+	data, err := readLimited(resp.Body, maxResponseBytes)
 	if err != nil {
 		return nil, "", err
 	}

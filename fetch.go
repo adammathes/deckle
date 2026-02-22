@@ -17,6 +17,30 @@ import (
 
 const defaultUA = "Mozilla/5.0 (X11; Linux x86_64; rv:133.0) Gecko/20100101 Firefox/133.0"
 
+// maxResponseBytes is the maximum number of bytes to read from any single
+// HTTP response body. Responses exceeding this limit are rejected with an
+// error. Set from the -max-response-size CLI flag; 0 means unlimited.
+var maxResponseBytes int64 = 128 * 1024 * 1024 // 128 MB default
+
+// readLimited reads up to maxResponseBytes from r. If the response exceeds
+// the limit, it returns an error. If maxResponseBytes is 0, it reads without
+// limit (equivalent to io.ReadAll).
+func readLimited(r io.Reader, limit int64) ([]byte, error) {
+	if limit <= 0 {
+		return io.ReadAll(r)
+	}
+	// Read limit+1 bytes so we can detect overflow without a custom reader.
+	lr := io.LimitReader(r, limit+1)
+	data, err := io.ReadAll(lr)
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(data)) > limit {
+		return nil, fmt.Errorf("response body exceeds maximum allowed size (%s)", humanSize(limit))
+	}
+	return data, nil
+}
+
 // utlsConn wraps a utls.UConn and satisfies net.Conn + the
 // ConnectionState interface that net/http2 needs.
 type utlsConn struct {
@@ -181,7 +205,7 @@ func fetchHTML(rawURL string, timeout time.Duration, userAgent string) ([]byte, 
 		return nil, nil, fmt.Errorf("HTTP %d for %s", resp.StatusCode, rawURL)
 	}
 
-	body, err := io.ReadAll(resp.Body)
+	body, err := readLimited(resp.Body, maxResponseBytes)
 	if err != nil {
 		return nil, nil, fmt.Errorf("reading response: %w", err)
 	}
