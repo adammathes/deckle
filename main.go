@@ -26,7 +26,12 @@ var logOut io.Writer = os.Stderr
 
 // processURL fetches a URL and runs the full article pipeline.
 // Returns the final HTML string, article title, source info, and any error.
-func processURL(rawURL string, opts optimizeOpts, timeout time.Duration, userAgent string, titleOverride string) (string, string, sourceInfo, error) {
+// concurrency controls how many images are fetched in parallel.
+func processURL(rawURL string, opts optimizeOpts, timeout time.Duration, userAgent string, titleOverride string, concurrency int) (string, string, sourceInfo, error) {
+	if concurrency < 1 {
+		concurrency = 1
+	}
+
 	htmlBytes, pageURL, err := fetchHTML(rawURL, timeout, userAgent)
 	if err != nil {
 		return "", "", sourceInfo{}, err
@@ -40,7 +45,7 @@ func processURL(rawURL string, opts optimizeOpts, timeout time.Duration, userAge
 	}
 	fmt.Fprintf(logOut, "Title: %s\n", meta.Title)
 
-	result := processArticleImages([]byte(content), opts)
+	result := processArticleImages([]byte(content), opts, concurrency)
 
 	finalTitle := meta.Title
 	if titleOverride != "" {
@@ -86,11 +91,15 @@ type cliConfig struct {
 	timeout       time.Duration
 	userAgent     string
 	epubMode      bool
+	concurrency   int
 	args          []string
 }
 
 // run executes the main application logic, returning any error.
 func run(cfg cliConfig) error {
+	if cfg.concurrency < 1 {
+		cfg.concurrency = 5
+	}
 	if cfg.epubMode {
 		if cfg.output == "" {
 			return fmt.Errorf("-epub requires -o output.epub")
@@ -135,7 +144,7 @@ func run(cfg cliConfig) error {
 		}
 		results := make([]result, len(urls))
 		var wg sync.WaitGroup
-		sem := make(chan struct{}, 5) // Limit to 5 concurrent jobs
+		sem := make(chan struct{}, cfg.concurrency)
 
 		for i, rawURL := range urls {
 			wg.Add(1)
@@ -145,7 +154,7 @@ func run(cfg cliConfig) error {
 				defer func() { <-sem }() // Release
 
 				fmt.Fprintf(logOut, "[%d/%d] %s\n", i+1, len(urls), rawURL)
-				h, t, src, err := processURL(rawURL, cfg.opts, cfg.timeout, cfg.userAgent, "")
+				h, t, src, err := processURL(rawURL, cfg.opts, cfg.timeout, cfg.userAgent, "", cfg.concurrency)
 				if err != nil {
 					fmt.Fprintf(logOut, "  Error: %v (skipping)\n", err)
 					return
@@ -207,7 +216,7 @@ func run(cfg cliConfig) error {
 		return fmt.Errorf("single URL mode requires exactly one URL argument")
 	}
 
-	final, _, _, err := processURL(cfg.args[0], cfg.opts, cfg.timeout, cfg.userAgent, cfg.titleOverride)
+	final, _, _, err := processURL(cfg.args[0], cfg.opts, cfg.timeout, cfg.userAgent, cfg.titleOverride, cfg.concurrency)
 	if err != nil {
 		return err
 	}
@@ -231,6 +240,7 @@ func main() {
 	timeout := flag.Duration("timeout", 30*time.Second, "HTTP fetch timeout")
 	userAgent := flag.String("user-agent", defaultUA, "HTTP User-Agent header")
 	epubMode := flag.Bool("epub", false, "Generate epub (requires -o, accepts multiple URLs or a .txt file)")
+	concurrency := flag.Int("concurrency", 5, "Max concurrent downloads for articles and images")
 	silent := flag.Bool("silent", false, "Suppress all output except errors (for pipeline use)")
 	flag.Usage = func() {
 		fmt.Fprintf(os.Stderr, "Usage: deckle [options] <URL>\n")
@@ -244,6 +254,11 @@ func main() {
 		logOut = io.Discard
 	}
 
+	conc := *concurrency
+	if conc < 1 {
+		conc = 1
+	}
+
 	cfg := cliConfig{
 		opts: optimizeOpts{
 			maxWidth:  *maxWidth,
@@ -255,6 +270,7 @@ func main() {
 		timeout:       *timeout,
 		userAgent:     *userAgent,
 		epubMode:      *epubMode,
+		concurrency:   conc,
 		args:          flag.Args(),
 	}
 

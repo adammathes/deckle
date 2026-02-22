@@ -127,7 +127,7 @@ func TestProcessArticleImages_StandaloneImg(t *testing.T) {
 	html := `<html><body><img src="` + dataURI("image/png", imgData) + `" alt="test"></body></html>`
 
 	opts := optimizeOpts{maxWidth: 800, quality: 60, grayscale: false}
-	result := processArticleImages([]byte(html), opts)
+	result := processArticleImages([]byte(html), opts, 5)
 
 	if !strings.Contains(string(result), "data:image/jpeg;base64,") {
 		t.Error("expected JPEG data URI in output")
@@ -147,7 +147,7 @@ func TestProcessArticleImages_PictureElement(t *testing.T) {
 		`</picture></body></html>`
 
 	opts := optimizeOpts{maxWidth: 800, quality: 60, grayscale: false}
-	result := string(processArticleImages([]byte(html), opts))
+	result := string(processArticleImages([]byte(html), opts, 5))
 
 	if strings.Contains(result, "<picture") {
 		t.Error("expected <picture> to be collapsed")
@@ -169,7 +169,7 @@ func TestProcessArticleImages_SVGPassthrough(t *testing.T) {
 	html := `<img src="` + uri + `">`
 
 	opts := optimizeOpts{maxWidth: 800, quality: 60}
-	result := string(processArticleImages([]byte(html), opts))
+	result := string(processArticleImages([]byte(html), opts, 5))
 
 	if !strings.Contains(result, "image/svg+xml") {
 		t.Error("SVG data URI should be preserved")
@@ -429,7 +429,7 @@ func TestFetchAndEmbed_Success(t *testing.T) {
 	defer func() { fetchImageClient = saved }()
 
 	html := []byte(`<img src="` + srv.URL + `/img.png" alt="test">`)
-	result := fetchAndEmbed(html)
+	result := fetchAndEmbed(html, 5)
 
 	if !strings.Contains(string(result), "data:image/png;base64,") {
 		t.Error("expected data URI in output")
@@ -450,7 +450,7 @@ func TestFetchAndEmbed_404(t *testing.T) {
 	defer func() { fetchImageClient = saved }()
 
 	html := []byte(`<img src="` + srv.URL + `/missing.png" alt="test">`)
-	result := fetchAndEmbed(html)
+	result := fetchAndEmbed(html, 5)
 
 	// Should keep original URL on failure
 	if !strings.Contains(string(result), srv.URL) {
@@ -460,7 +460,7 @@ func TestFetchAndEmbed_404(t *testing.T) {
 
 func TestFetchAndEmbed_NoExternalImages(t *testing.T) {
 	html := []byte(`<img src="data:image/png;base64,abc" alt="test">`)
-	result := fetchAndEmbed(html)
+	result := fetchAndEmbed(html, 5)
 	if string(result) != string(html) {
 		t.Error("data URI images should be left unchanged")
 	}
@@ -480,7 +480,7 @@ func TestFetchAndEmbed_MIMESniffing(t *testing.T) {
 	defer func() { fetchImageClient = saved }()
 
 	html := []byte(`<img src="` + srv.URL + `/img.bin" alt="test">`)
-	result := fetchAndEmbed(html)
+	result := fetchAndEmbed(html, 5)
 
 	if !strings.Contains(string(result), "data:image/jpeg;base64,") {
 		t.Error("expected MIME to be sniffed as JPEG")
@@ -671,7 +671,7 @@ func TestProcessArticleImages_PictureWithNonOptimizableDataURI(t *testing.T) {
 		`<img alt="svg pic">` +
 		`</picture>`
 	opts := optimizeOpts{maxWidth: 800, quality: 60}
-	result := string(processArticleImages([]byte(html), opts))
+	result := string(processArticleImages([]byte(html), opts, 5))
 
 	if strings.Contains(result, "<picture") {
 		t.Error("picture should be collapsed")
@@ -696,7 +696,7 @@ func TestProcessArticleImages_LazyLoadAndExternal(t *testing.T) {
 
 	html := `<img data-src="` + srv.URL + `/lazy.png" alt="lazy">`
 	opts := optimizeOpts{maxWidth: 800, quality: 60}
-	result := string(processArticleImages([]byte(html), opts))
+	result := string(processArticleImages([]byte(html), opts, 5))
 
 	if strings.Contains(result, "data-src=") {
 		t.Error("data-src should be promoted")
@@ -720,7 +720,7 @@ func TestProcessArticleImages_ExternalImages(t *testing.T) {
 
 	html := `<html><body><img src="` + srv.URL + `/img.png" alt="test"></body></html>`
 	opts := optimizeOpts{maxWidth: 800, quality: 60}
-	result := processArticleImages([]byte(html), opts)
+	result := processArticleImages([]byte(html), opts, 5)
 
 	if strings.Contains(string(result), "http://") {
 		t.Error("external URLs should be embedded as data URIs")
@@ -747,7 +747,7 @@ func TestProcessArticleImages_PictureWithExternalSrcset(t *testing.T) {
 		`<img alt="hero">` +
 		`</picture>`
 	opts := optimizeOpts{maxWidth: 800, quality: 60}
-	result := string(processArticleImages([]byte(html), opts))
+	result := string(processArticleImages([]byte(html), opts, 5))
 
 	if strings.Contains(result, "<picture") {
 		t.Error("picture element should be collapsed")
@@ -763,7 +763,7 @@ func TestProcessArticleImages_PictureWithExternalSrcset(t *testing.T) {
 func TestProcessArticleImages_NoImages(t *testing.T) {
 	html := `<p>No images here.</p>`
 	opts := optimizeOpts{maxWidth: 800, quality: 60}
-	result := processArticleImages([]byte(html), opts)
+	result := processArticleImages([]byte(html), opts, 5)
 	if !strings.Contains(string(result), "No images here.") {
 		t.Error("text content should be preserved")
 	}

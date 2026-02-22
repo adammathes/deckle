@@ -17,6 +17,7 @@ import (
 	"net/http"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 
 	xdraw "golang.org/x/image/draw"
@@ -190,65 +191,104 @@ func promoteLazySrc(html []byte) []byte {
 	return html
 }
 
+// fetchOneImage downloads a single external image URL and returns its data URI
+// components, or empty strings on failure.
+func fetchOneImage(imgURL string) (mime, encoded string) {
+	resp, err := getImageClient().Get(imgURL)
+	if err != nil {
+		fmt.Fprintf(logOut, "Warning: could not fetch %s: %v\n", imgURL, err)
+		return "", ""
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != 200 {
+		fmt.Fprintf(logOut, "Warning: HTTP %d for %s\n", resp.StatusCode, imgURL)
+		return "", ""
+	}
+
+	data, err := io.ReadAll(resp.Body)
+	if err != nil {
+		fmt.Fprintf(logOut, "Warning: could not read %s: %v\n", imgURL, err)
+		return "", ""
+	}
+
+	// Detect MIME from Content-Type header or sniff
+	m := resp.Header.Get("Content-Type")
+	if i := strings.Index(m, ";"); i >= 0 {
+		m = m[:i]
+	}
+	m = strings.TrimSpace(m)
+	if m == "" || m == "application/octet-stream" {
+		m = http.DetectContentType(data)
+		if i := strings.Index(m, ";"); i >= 0 {
+			m = m[:i]
+		}
+	}
+
+	return m, base64.StdEncoding.EncodeToString(data)
+}
+
 // fetchAndEmbed downloads external image URLs and embeds them as data URIs.
-func fetchAndEmbed(html []byte) []byte {
-	var fetched int
-	html = extImgRe.ReplaceAllFunc(html, func(match []byte) []byte {
-		parts := extImgRe.FindSubmatch(match)
-		if parts == nil {
-			return match
-		}
-		prefix := parts[1]
-		url := string(parts[2])
-		suffix := parts[3]
+// concurrency controls how many images are fetched in parallel (min 1).
+func fetchAndEmbed(html []byte, concurrency int) []byte {
+	if concurrency < 1 {
+		concurrency = 1
+	}
 
-		resp, err := getImageClient().Get(url)
-		if err != nil {
-			fmt.Fprintf(logOut, "Warning: could not fetch %s: %v\n", url, err)
-			return match
-		}
-		defer resp.Body.Close()
-		if resp.StatusCode != 200 {
-			fmt.Fprintf(logOut, "Warning: HTTP %d for %s\n", resp.StatusCode, url)
-			return match
-		}
+	// Find all external image matches
+	matches := extImgRe.FindAllSubmatchIndex(html, -1)
+	if len(matches) == 0 {
+		return html
+	}
 
-		data, err := io.ReadAll(resp.Body)
-		if err != nil {
-			fmt.Fprintf(logOut, "Warning: could not read %s: %v\n", url, err)
-			return match
-		}
+	// Fetch all images concurrently
+	type fetchResult struct {
+		mime    string
+		encoded string
+	}
+	results := make([]fetchResult, len(matches))
+	var wg sync.WaitGroup
+	sem := make(chan struct{}, concurrency)
 
-		// Detect MIME from Content-Type header or sniff
-		mime := resp.Header.Get("Content-Type")
-		if i := strings.Index(mime, ";"); i >= 0 {
-			mime = mime[:i]
-		}
-		mime = strings.TrimSpace(mime)
-		if mime == "" || mime == "application/octet-stream" {
-			mime = http.DetectContentType(data)
-			if i := strings.Index(mime, ";"); i >= 0 {
-				mime = mime[:i]
-			}
-		}
+	for i, m := range matches {
+		imgURL := string(html[m[4]:m[5]]) // group 2: the URL
+		wg.Add(1)
+		go func(i int, imgURL string) {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+			mime, encoded := fetchOneImage(imgURL)
+			results[i] = fetchResult{mime: mime, encoded: encoded}
+		}(i, imgURL)
+	}
+	wg.Wait()
 
-		encoded := base64.StdEncoding.EncodeToString(data)
-		fetched++
-
-		var out bytes.Buffer
-		out.Write(prefix)
-		out.WriteString("data:")
-		out.WriteString(mime)
-		out.WriteString(";base64,")
-		out.WriteString(encoded)
-		out.Write(suffix)
-		return out.Bytes()
-	})
+	// Rebuild HTML with fetched results
+	var out bytes.Buffer
+	prev := 0
+	fetched := 0
+	for i, m := range matches {
+		out.Write(html[prev:m[0]])
+		if results[i].encoded != "" {
+			// Write prefix (group 1)
+			out.Write(html[m[2]:m[3]])
+			out.WriteString("data:")
+			out.WriteString(results[i].mime)
+			out.WriteString(";base64,")
+			out.WriteString(results[i].encoded)
+			// Write suffix (group 3: closing quote)
+			out.Write(html[m[6]:m[7]])
+			fetched++
+		} else {
+			out.Write(html[m[0]:m[1]]) // keep original
+		}
+		prev = m[1]
+	}
+	out.Write(html[prev:])
 
 	if fetched > 0 {
 		fmt.Fprintf(logOut, "Fetched and embedded %d external images\n", fetched)
 	}
-	return html
+	return out.Bytes()
 }
 
 type stats struct {
@@ -368,14 +408,15 @@ func pickBestSrcsetURL(pictureHTML []byte) string {
 // processArticleImages handles all image processing for article HTML:
 // promotes lazy-loaded images, fetches external images, collapses <picture>
 // elements, and optimizes all images for e-readers.
-func processArticleImages(html []byte, opts optimizeOpts) []byte {
+// concurrency controls how many external images are fetched in parallel.
+func processArticleImages(html []byte, opts optimizeOpts, concurrency int) []byte {
 	var st stats
 
 	// Promote lazy-loaded images (data-src → src)
 	html = promoteLazySrc(html)
 
 	// Fetch external image URLs and embed as data URIs
-	html = fetchAndEmbed(html)
+	html = fetchAndEmbed(html, concurrency)
 
 	// Collapse <picture> elements into single <img> tags
 	html = pictureRe.ReplaceAllFunc(html, func(match []byte) []byte {

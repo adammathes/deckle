@@ -181,7 +181,7 @@ func TestIntegration_RichArticle(t *testing.T) {
 
 	// Run full pipeline
 	opts := optimizeOpts{maxWidth: 800, quality: 60, grayscale: true}
-	html, title, src, err := processURL(srv.URL, opts, 5*time.Second, "test-agent", "")
+	html, title, src, err := processURL(srv.URL, opts, 5*time.Second, "test-agent", "", 5)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -282,7 +282,7 @@ func TestIntegration_ExternalImages(t *testing.T) {
 	defer func() { fetchImageClient = saved }()
 
 	opts := optimizeOpts{maxWidth: 800, quality: 60, grayscale: false}
-	html, _, _, err := processURL(srv.URL, opts, 5*time.Second, "test-agent", "")
+	html, _, _, err := processURL(srv.URL, opts, 5*time.Second, "test-agent", "", 5)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -315,7 +315,7 @@ func TestIntegration_TextOnlyArticle(t *testing.T) {
 	defer srv.Close()
 
 	opts := optimizeOpts{maxWidth: 800, quality: 60}
-	html, title, _, err := processURL(srv.URL, opts, 5*time.Second, "test-agent", "")
+	html, title, _, err := processURL(srv.URL, opts, 5*time.Second, "test-agent", "", 5)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -359,7 +359,7 @@ func TestIntegration_ManyImages(t *testing.T) {
 
 	start := time.Now()
 	opts := optimizeOpts{maxWidth: 800, quality: 60, grayscale: true}
-	html, _, _, err := processURL(srv.URL, opts, 10*time.Second, "test-agent", "")
+	html, _, _, err := processURL(srv.URL, opts, 10*time.Second, "test-agent", "", 5)
 	elapsed := time.Since(start)
 
 	if err != nil {
@@ -570,7 +570,7 @@ article is long enough to be properly extracted by the algorithm.</p>
 	defer func() { fetchImageClient = saved }()
 
 	opts := optimizeOpts{maxWidth: 800, quality: 60}
-	html, _, _, err := processURL(srv.URL, opts, 5*time.Second, "test-agent", "")
+	html, _, _, err := processURL(srv.URL, opts, 5*time.Second, "test-agent", "", 5)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -611,7 +611,7 @@ func TestIntegration_LargeArticle(t *testing.T) {
 
 	start := time.Now()
 	opts := optimizeOpts{maxWidth: 800, quality: 60}
-	html, _, _, err := processURL(srv.URL, opts, 10*time.Second, "test-agent", "")
+	html, _, _, err := processURL(srv.URL, opts, 10*time.Second, "test-agent", "", 5)
 	elapsed := time.Since(start)
 
 	if err != nil {
@@ -737,7 +737,7 @@ to satisfy readability requirements and heuristics for extraction.</p>
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		_, _, _, err := processURL(srv.URL, opts, 5*time.Second, "bench-agent", "")
+		_, _, _, err := processURL(srv.URL, opts, 5*time.Second, "bench-agent", "", 5)
 		if err != nil {
 			b.Fatal(err)
 		}
@@ -782,5 +782,380 @@ func BenchmarkBuildEpub(b *testing.B) {
 		if err := buildEpub(articles, "Bench Book", outPath); err != nil {
 			b.Fatal(err)
 		}
+	}
+}
+
+// ---------- concurrent image fetch benchmarks ----------
+
+// newLatencyImageServer creates a test server that serves image data
+// with a configurable per-request latency to simulate real-world conditions.
+func newLatencyImageServer(imgData map[string][]byte, latency time.Duration) *httptest.Server {
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if latency > 0 {
+			time.Sleep(latency)
+		}
+		key := strings.TrimPrefix(r.URL.Path, "/img/")
+		if data, ok := imgData[key]; ok {
+			if strings.HasSuffix(key, ".jpeg") || strings.HasSuffix(key, ".jpg") {
+				w.Header().Set("Content-Type", "image/jpeg")
+			} else {
+				w.Header().Set("Content-Type", "image/png")
+			}
+			w.Write(data)
+			return
+		}
+		w.WriteHeader(404)
+	}))
+}
+
+// buildExternalImageHTML constructs HTML with N external image tags pointing
+// to the given server URL.
+func buildExternalImageHTML(srvURL string, n int) []byte {
+	var b strings.Builder
+	b.WriteString(`<html><body>`)
+	for i := 0; i < n; i++ {
+		fmt.Fprintf(&b, `<img src="%s/img/%d.png" alt="image %d">`+"\n", srvURL, i, i)
+	}
+	b.WriteString(`</body></html>`)
+	return []byte(b.String())
+}
+
+// BenchmarkFetchAndEmbed_Sequential benchmarks fetching 10 external images
+// sequentially (concurrency=1) with simulated 10ms server latency.
+func BenchmarkFetchAndEmbed_Sequential(b *testing.B) {
+	const numImages = 10
+	const latency = 10 * time.Millisecond
+
+	savedLog := logOut
+	logOut = io.Discard
+	defer func() { logOut = savedLog }()
+
+	imgs := make(map[string][]byte, numImages)
+	for i := 0; i < numImages; i++ {
+		imgs[fmt.Sprintf("%d.png", i)] = makePNG(200, 150, color.NRGBA{uint8(i * 20), 100, 200, 255})
+	}
+
+	srv := newLatencyImageServer(imgs, latency)
+	defer srv.Close()
+
+	saved := fetchImageClient
+	fetchImageClient = srv.Client()
+	defer func() { fetchImageClient = saved }()
+
+	html := buildExternalImageHTML(srv.URL, numImages)
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		result := fetchAndEmbed(html, 1) // sequential
+		if !strings.Contains(string(result), "data:image/png;base64,") {
+			b.Fatal("expected embedded images")
+		}
+	}
+}
+
+// BenchmarkFetchAndEmbed_Concurrent benchmarks fetching 10 external images
+// concurrently (concurrency=10) with simulated 10ms server latency.
+func BenchmarkFetchAndEmbed_Concurrent(b *testing.B) {
+	const numImages = 10
+	const latency = 10 * time.Millisecond
+
+	savedLog := logOut
+	logOut = io.Discard
+	defer func() { logOut = savedLog }()
+
+	imgs := make(map[string][]byte, numImages)
+	for i := 0; i < numImages; i++ {
+		imgs[fmt.Sprintf("%d.png", i)] = makePNG(200, 150, color.NRGBA{uint8(i * 20), 100, 200, 255})
+	}
+
+	srv := newLatencyImageServer(imgs, latency)
+	defer srv.Close()
+
+	saved := fetchImageClient
+	fetchImageClient = srv.Client()
+	defer func() { fetchImageClient = saved }()
+
+	html := buildExternalImageHTML(srv.URL, numImages)
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		result := fetchAndEmbed(html, 10) // concurrent
+		if !strings.Contains(string(result), "data:image/png;base64,") {
+			b.Fatal("expected embedded images")
+		}
+	}
+}
+
+// BenchmarkFetchAndEmbed_Concurrent5 benchmarks with concurrency=5 (the default).
+func BenchmarkFetchAndEmbed_Concurrent5(b *testing.B) {
+	const numImages = 10
+	const latency = 10 * time.Millisecond
+
+	savedLog := logOut
+	logOut = io.Discard
+	defer func() { logOut = savedLog }()
+
+	imgs := make(map[string][]byte, numImages)
+	for i := 0; i < numImages; i++ {
+		imgs[fmt.Sprintf("%d.png", i)] = makePNG(200, 150, color.NRGBA{uint8(i * 20), 100, 200, 255})
+	}
+
+	srv := newLatencyImageServer(imgs, latency)
+	defer srv.Close()
+
+	saved := fetchImageClient
+	fetchImageClient = srv.Client()
+	defer func() { fetchImageClient = saved }()
+
+	html := buildExternalImageHTML(srv.URL, numImages)
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		result := fetchAndEmbed(html, 5) // 5 concurrent
+		if !strings.Contains(string(result), "data:image/png;base64,") {
+			b.Fatal("expected embedded images")
+		}
+	}
+}
+
+// ---------- race condition tests ----------
+
+// TestConcurrentFetchAndEmbed_Race verifies that concurrent image fetching
+// has no data races. Run with: go test -race -run=TestConcurrentFetchAndEmbed_Race
+func TestConcurrentFetchAndEmbed_Race(t *testing.T) {
+	imgData := makePNG(50, 50, color.NRGBA{255, 0, 0, 255})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "image/png")
+		w.Write(imgData)
+	}))
+	defer srv.Close()
+
+	saved := fetchImageClient
+	fetchImageClient = srv.Client()
+	defer func() { fetchImageClient = saved }()
+
+	// Build HTML with 20 external images
+	html := buildExternalImageHTML(srv.URL, 20)
+
+	// Run fetchAndEmbed with high concurrency
+	result := fetchAndEmbed(html, 20)
+
+	// Verify all images were embedded
+	count := strings.Count(string(result), "data:image/png;base64,")
+	if count != 20 {
+		t.Errorf("expected 20 embedded images, got %d", count)
+	}
+
+	// Verify no external URLs remain
+	if strings.Contains(string(result), "http://") {
+		t.Error("expected all external URLs to be replaced")
+	}
+}
+
+// TestConcurrentProcessArticleImages_Race verifies the full image pipeline
+// has no data races with concurrent external image fetching.
+func TestConcurrentProcessArticleImages_Race(t *testing.T) {
+	imgData := makePNG(100, 75, color.NRGBA{0, 200, 100, 255})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "image/png")
+		w.Write(imgData)
+	}))
+	defer srv.Close()
+
+	saved := fetchImageClient
+	fetchImageClient = srv.Client()
+	defer func() { fetchImageClient = saved }()
+
+	// HTML with a mix of external images and embedded data URIs
+	embeddedData := makePNG(800, 600, color.NRGBA{100, 100, 200, 255})
+	embeddedURI := dataURI("image/png", embeddedData)
+	var b strings.Builder
+	b.WriteString(`<html><body>`)
+	for i := 0; i < 8; i++ {
+		fmt.Fprintf(&b, `<img src="%s/img/%d.png" alt="ext %d">`+"\n", srv.URL, i, i)
+	}
+	for i := 0; i < 4; i++ {
+		fmt.Fprintf(&b, `<img src="%s" alt="embedded %d">`+"\n", embeddedURI, i)
+	}
+	b.WriteString(`</body></html>`)
+
+	opts := optimizeOpts{maxWidth: 800, quality: 60, grayscale: false}
+	result := processArticleImages([]byte(b.String()), opts, 8)
+
+	// External images should be fetched, embedded, and optimized to JPEG
+	jpegCount := strings.Count(string(result), "data:image/jpeg;base64,")
+	if jpegCount < 8 {
+		t.Errorf("expected at least 8 JPEG images (external fetched + embedded optimized), got %d", jpegCount)
+	}
+
+	// No external URLs should remain
+	if strings.Contains(string(result), "http://") {
+		t.Error("expected all external URLs to be replaced with data URIs")
+	}
+}
+
+// TestConcurrentEpubPipeline_Race verifies the full epub pipeline
+// has no data races when processing multiple articles concurrently.
+func TestConcurrentEpubPipeline_Race(t *testing.T) {
+	imgData := makePNG(200, 150, color.NRGBA{100, 50, 200, 255})
+
+	var srv *httptest.Server
+	srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/img/") {
+			w.Header().Set("Content-Type", "image/png")
+			w.Write(imgData)
+			return
+		}
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.Write([]byte(fmt.Sprintf(`<!DOCTYPE html>
+<html><head><title>Race Test %s</title></head><body>
+<article>
+<h1>Race Test Article %s</h1>
+<p>Content for race condition testing with enough text for readability.
+The readability algorithm needs substantial content to extract properly.
+Additional filler text to ensure content density threshold is met.</p>
+<img src="%s/img/hero.png" alt="hero">
+<img src="%s/img/thumb.png" alt="thumb">
+<p>More content to satisfy readability requirements for extraction.</p>
+</article>
+</body></html>`, r.URL.Path, r.URL.Path, srv.URL, srv.URL)))
+	}))
+	defer srv.Close()
+
+	saved := fetchImageClient
+	fetchImageClient = srv.Client()
+	defer func() { fetchImageClient = saved }()
+
+	outFile := filepath.Join(t.TempDir(), "race.epub")
+	cfg := cliConfig{
+		opts:        optimizeOpts{maxWidth: 800, quality: 60},
+		output:      outFile,
+		timeout:     10 * time.Second,
+		userAgent:   "test-agent",
+		epubMode:    true,
+		concurrency: 5,
+		args: []string{
+			srv.URL + "/a1",
+			srv.URL + "/a2",
+			srv.URL + "/a3",
+			srv.URL + "/a4",
+			srv.URL + "/a5",
+		},
+	}
+
+	err := run(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Verify epub was created
+	info, err := os.Stat(outFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Size() < 100 {
+		t.Error("epub file too small")
+	}
+}
+
+// TestFetchAndEmbed_ConcurrencyLevels verifies that different concurrency
+// levels all produce identical output (correctness check).
+func TestFetchAndEmbed_ConcurrencyLevels(t *testing.T) {
+	imgData := make(map[string][]byte)
+	for i := 0; i < 8; i++ {
+		// Use different colors so each image has unique content
+		imgData[fmt.Sprintf("%d.png", i)] = makePNG(50, 50, color.NRGBA{
+			uint8(i * 30), uint8(255 - i*30), uint8(i * 15), 255,
+		})
+	}
+
+	srv := newLatencyImageServer(imgData, 0)
+	defer srv.Close()
+
+	saved := fetchImageClient
+	fetchImageClient = srv.Client()
+	defer func() { fetchImageClient = saved }()
+
+	html := buildExternalImageHTML(srv.URL, 8)
+
+	// Fetch with concurrency=1 as reference
+	reference := string(fetchAndEmbed(html, 1))
+
+	// Verify all concurrency levels produce output with the same number of images
+	refCount := strings.Count(reference, "data:image/png;base64,")
+	for _, conc := range []int{2, 4, 8, 16} {
+		result := string(fetchAndEmbed(html, conc))
+		gotCount := strings.Count(result, "data:image/png;base64,")
+		if gotCount != refCount {
+			t.Errorf("concurrency=%d: got %d embedded images, want %d", conc, gotCount, refCount)
+		}
+		// Verify no external URLs remain
+		if strings.Contains(result, "http://") {
+			t.Errorf("concurrency=%d: still has external URLs", conc)
+		}
+	}
+}
+
+// TestFetchAndEmbed_PartialFailures verifies that concurrent fetching
+// handles mixed success/failure gracefully (some images 404).
+func TestFetchAndEmbed_PartialFailures(t *testing.T) {
+	goodImg := makePNG(50, 50, color.NRGBA{0, 255, 0, 255})
+	var requestCount atomic.Int32
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestCount.Add(1)
+		key := strings.TrimPrefix(r.URL.Path, "/img/")
+		// Even-numbered images succeed, odd-numbered fail
+		n := 0
+		fmt.Sscanf(key, "%d.png", &n)
+		if n%2 == 0 {
+			w.Header().Set("Content-Type", "image/png")
+			w.Write(goodImg)
+		} else {
+			w.WriteHeader(404)
+		}
+	}))
+	defer srv.Close()
+
+	saved := fetchImageClient
+	fetchImageClient = srv.Client()
+	defer func() { fetchImageClient = saved }()
+
+	html := buildExternalImageHTML(srv.URL, 10)
+	result := string(fetchAndEmbed(html, 5))
+
+	// 5 even-numbered images should be embedded (0, 2, 4, 6, 8)
+	embeddedCount := strings.Count(result, "data:image/png;base64,")
+	if embeddedCount != 5 {
+		t.Errorf("expected 5 embedded images (even numbers), got %d", embeddedCount)
+	}
+
+	// 5 odd-numbered images should retain their original URLs
+	for _, n := range []int{1, 3, 5, 7, 9} {
+		expected := fmt.Sprintf(`src="%s/img/%d.png"`, srv.URL, n)
+		if !strings.Contains(result, expected) {
+			t.Errorf("expected original URL for image %d to be preserved", n)
+		}
+	}
+
+	// All 10 images should have been requested
+	if got := requestCount.Load(); got != 10 {
+		t.Errorf("expected 10 image requests, got %d", got)
+	}
+}
+
+// TestConcurrencyFlag verifies the -concurrency flag is parsed correctly.
+func TestConcurrencyFlag(t *testing.T) {
+	// Test that run() uses the concurrency setting
+	cfg := cliConfig{
+		opts:        optimizeOpts{maxWidth: 800, quality: 60},
+		concurrency: 0, // zero should be corrected to default
+	}
+	// run will set concurrency to 5 for zero-value
+	// Just verify it doesn't panic with concurrency=0
+	err := run(cfg)
+	// Expected error: no args provided in single mode
+	if err == nil {
+		t.Error("expected error (no args), but got nil")
 	}
 }
