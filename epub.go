@@ -344,6 +344,20 @@ blockquote { margin-left: 1em; padding-left: 0.5em; border-left: 2px solid #999;
 		cssPath = ""
 	}
 
+	// Generate and set cover image
+	coverPNG, err := generateCover(title, len(articles))
+	if err != nil {
+		fmt.Fprintf(logOut, "Warning: could not generate cover: %v\n", err)
+	} else {
+		coverURI := "data:image/png;base64," + base64.StdEncoding.EncodeToString(coverPNG)
+		imgPath, err := e.AddImage(coverURI, "cover.png")
+		if err != nil {
+			fmt.Fprintf(logOut, "Warning: could not add cover image: %v\n", err)
+		} else if err := e.SetCover(imgPath, ""); err != nil {
+			fmt.Fprintf(logOut, "Warning: could not set cover: %v\n", err)
+		}
+	}
+
 	// Add front matter table of contents
 	tocBody := buildTOCBody(articles)
 	_, err = e.AddSection(tocBody, "Contents", "contents.xhtml", cssPath)
