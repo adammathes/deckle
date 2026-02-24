@@ -4,6 +4,8 @@ go 1.24.4
 
 require (
 	codeberg.org/readeck/go-readability v0.0.0-20251125211941-0f57a445e5f1
+	github.com/JohannesKaufmann/dom v0.2.0
+	github.com/JohannesKaufmann/html-to-markdown/v2 v2.5.0
 	github.com/go-shiori/go-epub v1.2.1
 	github.com/refraction-networking/utls v1.8.2
 	golang.org/x/image v0.36.0
