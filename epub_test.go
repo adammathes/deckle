@@ -830,8 +830,8 @@ func TestSanitizeForXHTML_PreInP(t *testing.T) {
 }
 
 func TestBuildEpub_EpubCheck(t *testing.T) {
-	// Only run if epubcheck is available
-	if _, err := os.Stat("/usr/bin/epubcheck"); err != nil {
+	// Only run if epubcheck is available on PATH
+	if _, err := exec.LookPath("epubcheck"); err != nil {
 		t.Skip("epubcheck not installed")
 	}
 
