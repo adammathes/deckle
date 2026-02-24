@@ -6,13 +6,18 @@ import (
 	"image/png"
 	"strings"
 	"testing"
+	"path/filepath"
 
 	"golang.org/x/image/font/gofont/gobold"
 	"golang.org/x/image/font/gofont/goregular"
 )
 
-func TestGenerateCover_Basic(t *testing.T) {
-	data, err := generateCover("Weekly Reads", 12)
+func TestGenerateCover_Collage(t *testing.T) {
+	articles := []epubArticle{
+		{Title: "Article 1", Byline: "Author 1", SiteName: "Site 1"},
+		{Title: "Article 2", Byline: "Author 2", SiteName: "Site 2"},
+	}
+	data, err := generateCover("Weekly Reads", articles, "collage")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -31,36 +36,11 @@ func TestGenerateCover_Basic(t *testing.T) {
 	}
 }
 
-func TestGenerateCover_Deterministic(t *testing.T) {
-	a, err := generateCover("Same Title", 5)
-	if err != nil {
-		t.Fatal(err)
+func TestGenerateCover_Pattern(t *testing.T) {
+	articles := []epubArticle{
+		{Title: "Article 1"},
 	}
-	b, err := generateCover("Same Title", 5)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !bytes.Equal(a, b) {
-		t.Error("same inputs should produce identical covers")
-	}
-}
-
-func TestGenerateCover_DifferentTitles(t *testing.T) {
-	a, err := generateCover("Title A", 3)
-	if err != nil {
-		t.Fatal(err)
-	}
-	b, err := generateCover("Title B", 3)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if bytes.Equal(a, b) {
-		t.Error("different titles should produce different covers")
-	}
-}
-
-func TestGenerateCover_SingleArticle(t *testing.T) {
-	data, err := generateCover("Solo Article", 1)
+	data, err := generateCover("Weekly Reads", articles, "pattern")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -69,9 +49,40 @@ func TestGenerateCover_SingleArticle(t *testing.T) {
 	}
 }
 
+func TestGenerateCover_Deterministic(t *testing.T) {
+	articles := []epubArticle{{Title: "A"}}
+	a, err := generateCover("Same Title", articles, "collage")
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := generateCover("Same Title", articles, "collage")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(a, b) {
+		t.Error("same inputs should produce identical covers")
+	}
+}
+
+func TestGenerateCover_DifferentStyles(t *testing.T) {
+	articles := []epubArticle{{Title: "A"}}
+	a, err := generateCover("Same Title", articles, "collage")
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := generateCover("Same Title", articles, "pattern")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Equal(a, b) {
+		t.Error("different styles should produce different covers")
+	}
+}
+
 func TestGenerateCover_LongTitle(t *testing.T) {
 	title := "This Is a Very Long Title That Should Wrap Across Multiple Lines on the Cover Image"
-	data, err := generateCover(title, 7)
+	articles := []epubArticle{{Title: "A"}}
+	data, err := generateCover(title, articles, "collage")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -153,8 +164,8 @@ func TestBuildEpub_HasCover(t *testing.T) {
 		},
 	}
 
-	outPath := t.TempDir() + "/cover_test.epub"
-	if err := buildEpub(articles, "Cover Test", outPath); err != nil {
+	outPath := filepath.Join(t.TempDir(), "cover_test.epub")
+	if err := buildEpub(articles, "Cover Test", outPath, "collage"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -177,5 +188,38 @@ func TestBuildEpub_HasCover(t *testing.T) {
 		for _, f := range zr.File {
 			t.Logf("  %s", f.Name)
 		}
+	}
+}
+
+func TestBuildEpub_NoCover(t *testing.T) {
+	articles := []epubArticle{
+		{
+			HTML:  `<html><body><h1>Test Article</h1><p>Content.</p></body></html>`,
+			Title: "Test Article",
+			URL:   "https://example.com/test",
+		},
+	}
+
+	outPath := filepath.Join(t.TempDir(), "nocover_test.epub")
+	if err := buildEpub(articles, "Cover Test", outPath, "none"); err != nil {
+		t.Fatal(err)
+	}
+
+	// Open the epub (zip) and check that cover.png is MISSING
+	zr, err := zip.OpenReader(outPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer zr.Close()
+
+	hasCover := false
+	for _, f := range zr.File {
+		if strings.Contains(f.Name, "cover.png") {
+			hasCover = true
+			break
+		}
+	}
+	if hasCover {
+		t.Error("epub should NOT contain cover.png when style is 'none'")
 	}
 }

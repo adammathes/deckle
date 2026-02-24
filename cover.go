@@ -1,16 +1,16 @@
 // Cover image generation for epub output.
-// Produces a deterministic geometric pattern seeded from the book title,
-// with the title and article count overlaid as text.
+// Supports multiple cover styles: "collage" (default) and "pattern".
 package main
 
 import (
+	"bytes"
 	"crypto/sha256"
+	"fmt"
 	"image"
 	"image/color"
 	"image/png"
-	"bytes"
-	"fmt"
 	"math"
+	"strings"
 
 	"golang.org/x/image/draw"
 	"golang.org/x/image/font"
@@ -25,17 +25,12 @@ const (
 	coverHeight = 1800
 )
 
-// generateCover creates a PNG cover image with a deterministic geometric
-// pattern derived from the title and overlaid title text.
-func generateCover(title string, articleCount int) ([]byte, error) {
+// generateCover creates a PNG cover image based on the selected style.
+func generateCover(title string, articles []epubArticle, style string) ([]byte, error) {
 	img := image.NewGray(image.Rect(0, 0, coverWidth, coverHeight))
 
 	// Fill background white
 	draw.Draw(img, img.Bounds(), image.NewUniform(color.Gray{0xFF}), image.Point{}, draw.Src)
-
-	// Generate pattern from title hash
-	hash := sha256.Sum256([]byte(title))
-	drawPattern(img, hash)
 
 	// Load fonts
 	boldFace, err := loadFace(gobold.TTF, 64)
@@ -46,11 +41,22 @@ func generateCover(title string, articleCount int) ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("loading regular font: %w", err)
 	}
+	smallFace, err := loadFace(goregular.TTF, 24)
+	if err != nil {
+		return nil, fmt.Errorf("loading small font: %w", err)
+	}
 
-	// Draw title block in the centre
-	drawTitleBlock(img, title, articleCount, boldFace, regularFace)
+	switch style {
+	case "pattern":
+		drawPatternCover(img, title, len(articles), boldFace, regularFace)
+	case "collage":
+		drawCollageCover(img, title, articles, boldFace, regularFace, smallFace)
+	default:
+		// Default to collage if unknown
+		drawCollageCover(img, title, articles, boldFace, regularFace, smallFace)
+	}
 
-	// Draw "deckle" in bottom-right
+	// Draw "deckle" in bottom-right (common to all styles)
 	drawLabel(img, "deckle", regularFace, coverWidth-40, coverHeight-40, anchorRight)
 
 	var buf bytes.Buffer
@@ -58,6 +64,114 @@ func generateCover(title string, articleCount int) ([]byte, error) {
 		return nil, fmt.Errorf("encoding cover PNG: %w", err)
 	}
 	return buf.Bytes(), nil
+}
+
+// drawPatternCover implements the geometric pattern style.
+func drawPatternCover(img *image.Gray, title string, articleCount int, titleFace, metaFace font.Face) {
+	// Generate pattern from title hash
+	hash := sha256.Sum256([]byte(title))
+	drawPattern(img, hash)
+
+	// Draw title block in the centre
+	drawTitleBlock(img, title, articleCount, titleFace, metaFace)
+}
+
+// drawCollageCover implements the Table-of-Contents Collage style.
+func drawCollageCover(img *image.Gray, title string, articles []epubArticle, titleFace, bodyFace, metaFace font.Face) {
+	const (
+		padX      = 80
+		padY      = 120
+		lineGap   = 20
+		maxWidth  = coverWidth - padX*2
+		maxHeight = coverHeight - padY*2 - 100 // Leave space for footer
+	)
+
+	y := padY
+
+	// 1. Draw Title
+	lines := wrapText(title, titleFace, maxWidth)
+	lineHeight := titleFace.Metrics().Height.Ceil() + 8
+	for _, line := range lines {
+		drawString(img, line, titleFace, padX, y+titleFace.Metrics().Ascent.Ceil())
+		y += lineHeight
+	}
+	y += 40
+
+	// 2. Draw Divider
+	for x := padX; x < coverWidth-padX; x++ {
+		// Thick double line
+		img.SetGray(x, y, color.Gray{0x00})
+		img.SetGray(x, y+1, color.Gray{0x00})
+		img.SetGray(x, y+6, color.Gray{0x00})
+	}
+	y += 60
+
+	// 3. Draw Articles
+	bodyHeight := bodyFace.Metrics().Height.Ceil() + 8
+	metaHeight := metaFace.Metrics().Height.Ceil() + 8
+	
+	articlesShown := 0
+	
+	for i, art := range articles {
+		// Check if we have space for this article (Title + maybe meta line + margin)
+		// We approximate the height needed.
+		// Truncate title to 2 lines max to save space?
+		// Let's wrap and see.
+		
+		artTitle := art.Title
+		if artTitle == "" {
+			artTitle = fmt.Sprintf("Article %d", i+1)
+		}
+		
+		titleLines := wrapText(artTitle, bodyFace, maxWidth)
+		if len(titleLines) > 2 {
+			titleLines = titleLines[:2]
+			titleLines[1] = strings.TrimSuffix(titleLines[1], "...") + "..."
+		}
+		
+		entryHeight := len(titleLines)*bodyHeight + metaHeight + 30 // 30 is margin below
+		
+		// If this entry would push us past the limit, stop here
+		if y+entryHeight > maxHeight {
+			remaining := len(articles) - articlesShown
+			if remaining > 0 {
+				moreText := fmt.Sprintf("+ %d more articles", remaining)
+				drawString(img, moreText, bodyFace, padX, y+bodyFace.Metrics().Ascent.Ceil())
+			}
+			return
+		}
+		
+		// Draw Article Title
+		for _, line := range titleLines {
+			drawString(img, line, bodyFace, padX, y+bodyFace.Metrics().Ascent.Ceil())
+			y += bodyHeight
+		}
+		
+		// Draw Meta (Author, Site)
+		var metaParts []string
+		if art.Byline != "" {
+			metaParts = append(metaParts, art.Byline)
+		}
+		if art.SiteName != "" {
+			metaParts = append(metaParts, art.SiteName)
+		}
+		if len(metaParts) > 0 {
+			metaStr := "— " + strings.Join(metaParts, ", ")
+			// Truncate meta if too long
+			if font.MeasureString(metaFace, metaStr).Ceil() > maxWidth {
+				// Simple truncation for now
+				for font.MeasureString(metaFace, metaStr+"...").Ceil() > maxWidth && len(metaStr) > 0 {
+					metaStr = metaStr[:len(metaStr)-1]
+				}
+				metaStr += "..."
+			}
+			drawString(img, metaStr, metaFace, padX, y+metaFace.Metrics().Ascent.Ceil())
+			y += metaHeight
+		}
+		
+		y += 30 // Margin between articles
+		articlesShown++
+	}
 }
 
 // drawPattern fills the image with a grid of circles whose size and shade

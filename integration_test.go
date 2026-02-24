@@ -779,7 +779,7 @@ func BenchmarkBuildEpub(b *testing.B) {
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		outPath := filepath.Join(dir, fmt.Sprintf("bench_%d.epub", i))
-		if err := buildEpub(articles, "Bench Book", outPath); err != nil {
+		if err := buildEpub(articles, "Bench Book", outPath, "collage"); err != nil {
 			b.Fatal(err)
 		}
 	}

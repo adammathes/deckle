@@ -316,7 +316,7 @@ func buildTOCBody(articles []epubArticle) string {
 
 // buildEpub creates an epub3 file from a list of articles with metadata.
 // It generates a front matter table of contents followed by the article sections.
-func buildEpub(articles []epubArticle, title string, outputPath string) error {
+func buildEpub(articles []epubArticle, title string, outputPath string, coverStyle string) error {
 	e, err := epub.NewEpub(title)
 	if err != nil {
 		return fmt.Errorf("creating epub: %w", err)
@@ -345,16 +345,18 @@ blockquote { margin-left: 1em; padding-left: 0.5em; border-left: 2px solid #999;
 	}
 
 	// Generate and set cover image
-	coverPNG, err := generateCover(title, len(articles))
-	if err != nil {
-		fmt.Fprintf(logOut, "Warning: could not generate cover: %v\n", err)
-	} else {
-		coverURI := "data:image/png;base64," + base64.StdEncoding.EncodeToString(coverPNG)
-		imgPath, err := e.AddImage(coverURI, "cover.png")
+	if coverStyle != "none" {
+		coverPNG, err := generateCover(title, articles, coverStyle)
 		if err != nil {
-			fmt.Fprintf(logOut, "Warning: could not add cover image: %v\n", err)
-		} else if err := e.SetCover(imgPath, ""); err != nil {
-			fmt.Fprintf(logOut, "Warning: could not set cover: %v\n", err)
+			fmt.Fprintf(logOut, "Warning: could not generate cover: %v\n", err)
+		} else {
+			coverURI := "data:image/png;base64," + base64.StdEncoding.EncodeToString(coverPNG)
+			imgPath, err := e.AddImage(coverURI, "cover.png")
+			if err != nil {
+				fmt.Fprintf(logOut, "Warning: could not add cover image: %v\n", err)
+			} else if err := e.SetCover(imgPath, ""); err != nil {
+				fmt.Fprintf(logOut, "Warning: could not set cover: %v\n", err)
+			}
 		}
 	}
 
