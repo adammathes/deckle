@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"encoding/base64"
 	"fmt"
+	"html"
 	"image"
 	"image/color"
 	"image/draw"
@@ -193,6 +194,9 @@ func promoteLazySrc(html []byte) []byte {
 // fetchOneImage downloads a single external image URL and returns its data URI
 // components, or empty strings on failure.
 func fetchOneImage(imgURL string) (mime, encoded string) {
+	// Unescape HTML entities in URL (e.g. &amp; -> &)
+	imgURL = html.UnescapeString(imgURL)
+
 	resp, err := getImageClient().Get(imgURL)
 	if err != nil {
 		fmt.Fprintf(logOut, "Warning: could not fetch %s: %v\n", imgURL, err)
@@ -327,6 +331,9 @@ func tryOptimizeDataURI(mime, b64data string, opts optimizeOpts, st *stats) stri
 
 // fetchImage downloads an image URL and returns its bytes and MIME type.
 func fetchImage(imgURL string) ([]byte, string, error) {
+	// Unescape HTML entities in URL (e.g. &amp; -> &)
+	imgURL = html.UnescapeString(imgURL)
+
 	resp, err := getImageClient().Get(imgURL)
 	if err != nil {
 		return nil, "", err

@@ -122,25 +122,39 @@ func extractImages(e *epub.Epub, body string, chapterIdx int) (string, error) {
 	return result, lastErr
 }
 
-// allowedAttrs defines which attributes are safe for XHTML epub content.
+// isAllowedAttr defines which attributes are safe for XHTML epub content.
 // Returns true if the attribute should be kept.
 func isAllowedAttr(a html.Attribute) bool {
 	key := a.Key
-	// Standard safe attributes
+	// Standard safe attributes for EPUB 3
 	switch key {
 	case "id", "class", "style", "title", "lang", "dir",
 		"href", "src", "alt", "width", "height",
 		"colspan", "rowspan", "scope", "headers",
-		"cite", "datetime", "name", "value", "type",
+		"cite", "datetime", "value", "type",
 		"rel", "media", "start", "reversed":
 		return true
 	}
-	// aria-* attributes are allowed in epub
-	if strings.HasPrefix(key, "aria-") {
+	// epub:type is allowed and encouraged for semantic inflection
+	if key == "epub:type" {
 		return true
 	}
-	// epub:type is allowed
-	if key == "epub:type" {
+	return false
+}
+
+// isAllowedElement returns true if the tag is allowed in EPUB 3 XHTML.
+func isAllowedElement(n *html.Node) bool {
+	if n.Type != html.ElementNode {
+		return true
+	}
+	switch n.Data {
+	case "div", "p", "h1", "h2", "h3", "h4", "h5", "h6", "ul", "ol", "li", "dl", "dt", "dd",
+		"address", "hr", "pre", "blockquote", "cite", "em", "strong", "small", "s", "dfn",
+		"abbr", "data", "time", "code", "var", "samp", "kbd", "sub", "sup", "i", "b", "u",
+		"mark", "ruby", "rt", "rp", "bdi", "bdo", "span", "br", "wbr", "ins", "del", "img",
+		"table", "caption", "colgroup", "col", "tbody", "thead", "tfoot", "tr", "td", "th",
+		"section", "article", "aside", "header", "footer", "main", "figure", "figcaption", "nav",
+		"a", "source", "picture":
 		return true
 	}
 	return false
@@ -155,7 +169,7 @@ var voidElements = map[atom.Atom]bool{
 
 // sanitizeForXHTML converts HTML to valid XHTML for epub.
 // Strips non-standard attributes, ensures self-closing void elements,
-// and removes broken fragment links.
+// removes broken fragment links, and eliminates disallowed tags/nesting.
 func sanitizeForXHTML(htmlStr string) string {
 	doc, err := html.Parse(strings.NewReader(htmlStr))
 	if err != nil {
@@ -180,9 +194,73 @@ func sanitizeForXHTML(htmlStr string) string {
 	collectIDs(doc)
 
 	// Walk and clean the tree
-	var clean func(*html.Node)
-	clean = func(n *html.Node) {
+	var clean func(*html.Node) *html.Node
+	clean = func(n *html.Node) *html.Node {
 		if n.Type == html.ElementNode {
+			// Special handling for media tags: convert to links
+			if n.Data == "video" || n.Data == "audio" {
+				src := ""
+				for _, a := range n.Attr {
+					if a.Key == "src" {
+						src = a.Val
+						break
+					}
+				}
+				if src == "" {
+					for c := n.FirstChild; c != nil; c = c.NextSibling {
+						if c.Type == html.ElementNode && c.Data == "source" {
+							for _, a := range c.Attr {
+								if a.Key == "src" {
+									src = a.Val
+									break
+								}
+							}
+						}
+						if src != "" {
+							break
+						}
+					}
+				}
+				if src != "" {
+					link := &html.Node{
+						Type: html.ElementNode,
+						Data: "a",
+						Attr: []html.Attribute{{Key: "href", Val: src}},
+					}
+					text := &html.Node{
+						Type: html.TextNode,
+						Data: "[Media: " + src + "]",
+					}
+					link.AppendChild(text)
+					return link
+				}
+				return nil
+			}
+
+			// Apply element whitelist
+			if !isAllowedElement(n) {
+				// For structural elements not in the whitelist, we might want to unwrap them
+				// instead of deleting them. But for now, we follow the whitelist strictly.
+				// Exception: we don't want to remove 'body', 'html', 'head' if they are passed.
+				if n.Data != "html" && n.Data != "head" && n.Data != "body" {
+					return nil
+				}
+			}
+
+			// Special check for images
+			if n.Data == "img" {
+				hasSrc := false
+				for _, a := range n.Attr {
+					if a.Key == "src" && strings.TrimSpace(a.Val) != "" {
+						hasSrc = true
+						break
+					}
+				}
+				if !hasSrc {
+					return nil
+				}
+			}
+
 			// Filter attributes
 			var filtered []html.Attribute
 			for _, a := range n.Attr {
@@ -199,11 +277,40 @@ func sanitizeForXHTML(htmlStr string) string {
 				filtered = append(filtered, a)
 			}
 			n.Attr = filtered
+
+			// Fix nesting: elements that cannot contain <p> or other blocks
+			switch n.Data {
+			case "h1", "h2", "h3", "h4", "h5", "h6", "p", "span", "b", "strong", "i", "em":
+				for c := n.FirstChild; c != nil; {
+					next := c.NextSibling
+					if c.Type == html.ElementNode {
+						switch c.Data {
+						case "p", "div", "h1", "h2", "h3", "h4", "h5", "h6", "ul", "ol", "li", "blockquote", "section", "article", "aside", "header", "footer", "main", "figure", "figcaption", "nav":
+							for cc := c.FirstChild; cc != nil; {
+								cnext := cc.NextSibling
+								c.RemoveChild(cc)
+								n.InsertBefore(cc, c)
+								cc = cnext
+							}
+							n.RemoveChild(c)
+						}
+					}
+					c = next
+				}
+			}
 		}
 
-		for c := n.FirstChild; c != nil; c = c.NextSibling {
-			clean(c)
+		for c := n.FirstChild; c != nil; {
+			next := c.NextSibling
+			if result := clean(c); result == nil {
+				n.RemoveChild(c)
+			} else if result != c {
+				n.InsertBefore(result, c)
+				n.RemoveChild(c)
+			}
+			c = next
 		}
+		return n
 	}
 	clean(doc)
 
