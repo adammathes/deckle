@@ -516,6 +516,21 @@ func TestSanitizeForXHTML_PreInP(t *testing.T) {
 	}
 }
 
+func TestSanitizeForXHTML_MovedBlockGetsAttributesFiltered(t *testing.T) {
+	// When a structural block is moved out of a phrasing element during
+	// nesting repair, it must still have its attributes filtered.
+	// Regression: fuzzer found that <table invalid_attr> inside <a> produced
+	// output with unfiltered attributes.
+	input := `<a>text<table bogus="bad"><tr><td>cell</td></tr></table></a>`
+	result := sanitizeForXHTML(input)
+	if strings.Contains(result, "bogus") {
+		t.Errorf("moved block should have attributes filtered (got %q)", result)
+	}
+	if !strings.Contains(result, "cell") {
+		t.Error("table content should be preserved")
+	}
+}
+
 func TestSanitizeForXHTML_StripAVIFImages(t *testing.T) {
 	// AVIF images are not renderable by e-readers and should be removed.
 	input := `<p>before</p><img src="data:image/avif;base64,abc" alt="test"/><p>after</p>`

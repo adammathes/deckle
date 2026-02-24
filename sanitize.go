@@ -316,6 +316,9 @@ func (s *xhtmlSanitizer) fixNesting(n *html.Node) {
 		if c.Type == html.ElementNode && isBlockElement(c.Data) {
 			if isStructuralBlock(c.Data) && n.Parent != nil {
 				n.RemoveChild(c)
+				// Clean the moved node (filter attrs, recurse children)
+				// before inserting — it bypasses the normal tree walk.
+				s.clean(c)
 				target := n
 				for target.Parent != nil && target.Parent.Type == html.ElementNode && isPhrasingElement(target.Parent.Data) {
 					target = target.Parent
