@@ -157,6 +157,313 @@ var voidElements = map[atom.Atom]bool{
 	atom.Link: true, atom.Meta: true, atom.Source: true, atom.Wbr: true,
 }
 
+// xhtmlSanitizer holds state for a single HTML→XHTML sanitization pass.
+type xhtmlSanitizer struct {
+	ids     map[string]bool // all IDs present in the document
+	usedIDs map[string]bool // IDs already emitted (for deduplication)
+}
+
+// transformElement handles element-level transformations that may replace or
+// remove the node entirely: media→link conversion, source/picture removal,
+// element whitelist, and image validation.
+// Returns nil to remove, a different node to replace, or n to continue processing.
+func (s *xhtmlSanitizer) transformElement(n *html.Node) *html.Node {
+	// Convert media tags to links
+	if n.Data == "video" || n.Data == "audio" {
+		src := ""
+		for _, a := range n.Attr {
+			if a.Key == "src" {
+				src = a.Val
+				break
+			}
+		}
+		if src == "" {
+			for c := n.FirstChild; c != nil; c = c.NextSibling {
+				if c.Type == html.ElementNode && c.Data == "source" {
+					for _, a := range c.Attr {
+						if a.Key == "src" {
+							src = a.Val
+							break
+						}
+					}
+				}
+				if src != "" {
+					break
+				}
+			}
+		}
+		if src != "" {
+			link := &html.Node{
+				Type: html.ElementNode,
+				Data: "a",
+				Attr: []html.Attribute{{Key: "href", Val: src}},
+			}
+			text := &html.Node{
+				Type: html.TextNode,
+				Data: "[Media: " + src + "]",
+			}
+			link.AppendChild(text)
+			return link
+		}
+		return nil
+	}
+
+	// Remove <source> elements
+	if n.Data == "source" {
+		return nil
+	}
+
+	// Collapse <picture> to first <img> child
+	if n.Data == "picture" {
+		for c := n.FirstChild; c != nil; c = c.NextSibling {
+			if c.Type == html.ElementNode && c.Data == "img" {
+				n.RemoveChild(c)
+				return s.clean(c)
+			}
+		}
+		return nil
+	}
+
+	// Apply element whitelist
+	if !isAllowedElement(n) {
+		if n.Data != "html" && n.Data != "head" && n.Data != "body" {
+			return nil
+		}
+	}
+
+	// Validate images: must have src, no external URLs, no AVIF
+	if n.Data == "img" {
+		hasSrc := false
+		for _, a := range n.Attr {
+			if a.Key == "src" && strings.TrimSpace(a.Val) != "" {
+				src := strings.TrimSpace(a.Val)
+				if strings.HasPrefix(src, "http://") || strings.HasPrefix(src, "https://") {
+					return nil
+				}
+				if strings.HasPrefix(src, "data:image/avif") {
+					return nil
+				}
+				hasSrc = true
+				break
+			}
+		}
+		if !hasSrc {
+			return nil
+		}
+	}
+
+	return n // continue processing
+}
+
+// filterAttributes applies the attribute whitelist and sanitizes individual
+// attribute values (fragment links, IDs, dimensions).
+func (s *xhtmlSanitizer) filterAttributes(n *html.Node) {
+	var filtered []html.Attribute
+	for _, a := range n.Attr {
+		if !isAllowedAttr(a) {
+			continue
+		}
+		// Fix broken fragment links
+		if a.Key == "href" && strings.HasPrefix(a.Val, "#") {
+			frag := a.Val[1:]
+			if frag != "" && !s.ids[frag] {
+				continue
+			}
+		}
+		// Sanitize and deduplicate IDs
+		if a.Key == "id" {
+			cleaned := sanitizeID(a.Val)
+			if cleaned == "" {
+				continue
+			}
+			if s.usedIDs[cleaned] {
+				for i := 2; ; i++ {
+					candidate := fmt.Sprintf("%s-%d", cleaned, i)
+					if !s.usedIDs[candidate] {
+						cleaned = candidate
+						break
+					}
+				}
+			}
+			s.usedIDs[cleaned] = true
+			a.Val = cleaned
+		}
+		// Sanitize width/height
+		if a.Key == "width" || a.Key == "height" {
+			if !elemAllowsDimensions(n.Data) {
+				continue
+			}
+			cleaned := sanitizeDimensionAttr(a.Val)
+			if cleaned == "" || cleaned == "0" {
+				continue
+			}
+			a.Val = cleaned
+		}
+		filtered = append(filtered, a)
+	}
+	n.Attr = filtered
+}
+
+// fixNesting repairs invalid nesting where block elements appear inside
+// phrasing (inline) elements. Structural blocks are moved above all phrasing
+// ancestors; simple wrappers are unwrapped inline.
+func (s *xhtmlSanitizer) fixNesting(n *html.Node) {
+	if !isPhrasingElement(n.Data) {
+		return
+	}
+	for c := n.FirstChild; c != nil; {
+		next := c.NextSibling
+		if c.Type == html.ElementNode && isBlockElement(c.Data) {
+			if isStructuralBlock(c.Data) && n.Parent != nil {
+				n.RemoveChild(c)
+				target := n
+				for target.Parent != nil && target.Parent.Type == html.ElementNode && isPhrasingElement(target.Parent.Data) {
+					target = target.Parent
+				}
+				if target.Parent != nil {
+					target.Parent.InsertBefore(c, target)
+				}
+			} else {
+				for cc := c.FirstChild; cc != nil; {
+					cnext := cc.NextSibling
+					c.RemoveChild(cc)
+					n.InsertBefore(cc, c)
+					cc = cnext
+				}
+				n.RemoveChild(c)
+			}
+		}
+		c = next
+	}
+}
+
+// fixDLContent repairs the content model of <dl> elements to ensure they
+// contain valid dt/dd pairs as required by EPUB XHTML.
+func (s *xhtmlSanitizer) fixDLContent(n *html.Node) {
+	// First pass: wrap bare text and disallowed elements
+	for c := n.FirstChild; c != nil; {
+		next := c.NextSibling
+		if c.Type == html.TextNode {
+			if strings.TrimSpace(c.Data) != "" {
+				dt := &html.Node{Type: html.ElementNode, Data: "dt", DataAtom: atom.Dt}
+				n.InsertBefore(dt, c)
+				n.RemoveChild(c)
+				dt.AppendChild(c)
+			}
+		} else if c.Type == html.ElementNode {
+			if c.Data != "dt" && c.Data != "dd" && c.Data != "div" {
+				dd := &html.Node{Type: html.ElementNode, Data: "dd", DataAtom: atom.Dd}
+				n.InsertBefore(dd, c)
+				n.RemoveChild(c)
+				dd.AppendChild(c)
+			}
+		}
+		c = next
+	}
+	// Second pass: ensure dd comes after dt (not before)
+	seenDt := false
+	for c := n.FirstChild; c != nil; c = c.NextSibling {
+		if c.Type == html.ElementNode {
+			if c.Data == "dt" {
+				seenDt = true
+			} else if c.Data == "dd" && !seenDt {
+				dt := &html.Node{Type: html.ElementNode, Data: "dt", DataAtom: atom.Dt}
+				n.InsertBefore(dt, c)
+				seenDt = true
+			}
+		}
+	}
+	// Third pass: ensure last dt has a following dd
+	var lastDt *html.Node
+	for c := n.FirstChild; c != nil; c = c.NextSibling {
+		if c.Type == html.ElementNode {
+			if c.Data == "dt" {
+				lastDt = c
+			} else if c.Data == "dd" || c.Data == "div" {
+				lastDt = nil
+			}
+		}
+	}
+	if lastDt != nil {
+		dd := &html.Node{Type: html.ElementNode, Data: "dd", DataAtom: atom.Dd}
+		if lastDt.NextSibling != nil {
+			n.InsertBefore(dd, lastDt.NextSibling)
+		} else {
+			n.AppendChild(dd)
+		}
+	}
+	// Ensure <dl> has at least one dt/dd pair
+	hasDt := false
+	hasDd := false
+	for c := n.FirstChild; c != nil; c = c.NextSibling {
+		if c.Type == html.ElementNode {
+			if c.Data == "dt" {
+				hasDt = true
+			}
+			if c.Data == "dd" || c.Data == "div" {
+				hasDd = true
+			}
+		}
+	}
+	if !hasDt {
+		dt := &html.Node{Type: html.ElementNode, Data: "dt", DataAtom: atom.Dt}
+		if n.FirstChild != nil {
+			n.InsertBefore(dt, n.FirstChild)
+		} else {
+			n.AppendChild(dt)
+		}
+	}
+	if !hasDd {
+		dd := &html.Node{Type: html.ElementNode, Data: "dd", DataAtom: atom.Dd}
+		n.AppendChild(dd)
+	}
+}
+
+// fixFigcaption converts <figcaption> elements that appear outside a <figure>
+// into <p> elements.
+func (s *xhtmlSanitizer) fixFigcaption(n *html.Node) {
+	if n.Data == "figcaption" {
+		if n.Parent == nil || n.Parent.Data != "figure" {
+			n.Data = "p"
+			n.DataAtom = atom.P
+		}
+	}
+}
+
+// clean recursively processes a node and its children, applying all
+// sanitization rules. Returns nil to remove the node, a different node
+// to replace it, or n to keep it.
+func (s *xhtmlSanitizer) clean(n *html.Node) *html.Node {
+	if n.Type == html.ElementNode {
+		result := s.transformElement(n)
+		if result == nil {
+			return nil
+		}
+		if result != n {
+			return result
+		}
+
+		s.filterAttributes(n)
+		s.fixNesting(n)
+		if n.Data == "dl" {
+			s.fixDLContent(n)
+		}
+		s.fixFigcaption(n)
+	}
+
+	for c := n.FirstChild; c != nil; {
+		next := c.NextSibling
+		if result := s.clean(c); result == nil {
+			n.RemoveChild(c)
+		} else if result != c {
+			n.InsertBefore(result, c)
+			n.RemoveChild(c)
+		}
+		c = next
+	}
+	return n
+}
+
 // sanitizeForXHTML converts HTML to valid XHTML for epub.
 // Strips non-standard attributes, ensures self-closing void elements,
 // removes broken fragment links, and eliminates disallowed tags/nesting.
@@ -169,307 +476,11 @@ func sanitizeForXHTML(htmlStr string) string {
 		return htmlStr // fallback: return as-is
 	}
 
-	// Collect all IDs in the document (after sanitizing them)
-	ids := map[string]bool{}
-	var collectIDs func(*html.Node)
-	collectIDs = func(n *html.Node) {
-		if n.Type == html.ElementNode {
-			for _, a := range n.Attr {
-				if a.Key == "id" {
-					cleaned := sanitizeID(a.Val)
-					if cleaned != "" {
-						ids[cleaned] = true
-					}
-				}
-			}
-		}
-		for c := n.FirstChild; c != nil; c = c.NextSibling {
-			collectIDs(c)
-		}
+	s := &xhtmlSanitizer{
+		ids:     collectIDs(doc),
+		usedIDs: map[string]bool{},
 	}
-	collectIDs(doc)
-
-	// Track used IDs for deduplication
-	usedIDs := map[string]bool{}
-
-	// Walk and clean the tree
-	var clean func(*html.Node) *html.Node
-	clean = func(n *html.Node) *html.Node {
-		if n.Type == html.ElementNode {
-			// Special handling for media tags: convert to links
-			if n.Data == "video" || n.Data == "audio" {
-				src := ""
-				for _, a := range n.Attr {
-					if a.Key == "src" {
-						src = a.Val
-						break
-					}
-				}
-				if src == "" {
-					for c := n.FirstChild; c != nil; c = c.NextSibling {
-						if c.Type == html.ElementNode && c.Data == "source" {
-							for _, a := range c.Attr {
-								if a.Key == "src" {
-									src = a.Val
-									break
-								}
-							}
-						}
-						if src != "" {
-							break
-						}
-					}
-				}
-				if src != "" {
-					link := &html.Node{
-						Type: html.ElementNode,
-						Data: "a",
-						Attr: []html.Attribute{{Key: "href", Val: src}},
-					}
-					text := &html.Node{
-						Type: html.TextNode,
-						Data: "[Media: " + src + "]",
-					}
-					link.AppendChild(text)
-					return link
-				}
-				return nil
-			}
-
-			// Remove <source> elements — they require srcset in EPUB XHTML
-			// and should have been collapsed by processArticleImages already.
-			if n.Data == "source" {
-				return nil
-			}
-
-			// Remove <picture> elements — collapse to first <img> child if any
-			if n.Data == "picture" {
-				for c := n.FirstChild; c != nil; c = c.NextSibling {
-					if c.Type == html.ElementNode && c.Data == "img" {
-						n.RemoveChild(c)
-						return clean(c) // clean the extracted img (filter attrs, check external src)
-					}
-				}
-				return nil
-			}
-
-			// Apply element whitelist
-			if !isAllowedElement(n) {
-				if n.Data != "html" && n.Data != "head" && n.Data != "body" {
-					return nil
-				}
-			}
-
-			// Special check for images: must have src, and src must not be
-			// an external URL (remote resources are not allowed in EPUB).
-			// AVIF images are also stripped (e-readers can't display them).
-			if n.Data == "img" {
-				hasSrc := false
-				for _, a := range n.Attr {
-					if a.Key == "src" && strings.TrimSpace(a.Val) != "" {
-						src := strings.TrimSpace(a.Val)
-						// Remove images with external URLs (RSC-006)
-						if strings.HasPrefix(src, "http://") || strings.HasPrefix(src, "https://") {
-							return nil
-						}
-						// Remove AVIF images (not renderable by e-readers)
-						if strings.HasPrefix(src, "data:image/avif") {
-							return nil
-						}
-						hasSrc = true
-						break
-					}
-				}
-				if !hasSrc {
-					return nil
-				}
-			}
-
-			// Filter attributes
-			var filtered []html.Attribute
-			for _, a := range n.Attr {
-				if !isAllowedAttr(a) {
-					continue
-				}
-				// Fix broken fragment links
-				if a.Key == "href" && strings.HasPrefix(a.Val, "#") {
-					frag := a.Val[1:]
-					if frag != "" && !ids[frag] {
-						continue // drop href to non-existent ID
-					}
-				}
-				// Sanitize and deduplicate IDs
-				if a.Key == "id" {
-					cleaned := sanitizeID(a.Val)
-					if cleaned == "" {
-						continue // drop empty IDs
-					}
-					if usedIDs[cleaned] {
-						// Deduplicate: append suffix
-						for i := 2; ; i++ {
-							candidate := fmt.Sprintf("%s-%d", cleaned, i)
-							if !usedIDs[candidate] {
-								cleaned = candidate
-								break
-							}
-						}
-					}
-					usedIDs[cleaned] = true
-					a.Val = cleaned
-				}
-				// Sanitize width/height: must be integers, only on elements that allow them
-				if a.Key == "width" || a.Key == "height" {
-					if !elemAllowsDimensions(n.Data) {
-						continue // strip dimension attrs on non-dimension elements
-					}
-					cleaned := sanitizeDimensionAttr(a.Val)
-					if cleaned == "" || cleaned == "0" {
-						continue // drop invalid dimensions
-					}
-					a.Val = cleaned
-				}
-				filtered = append(filtered, a)
-			}
-			n.Attr = filtered
-
-			// Fix nesting: phrasing elements that cannot contain block elements.
-			if isPhrasingElement(n.Data) {
-				for c := n.FirstChild; c != nil; {
-					next := c.NextSibling
-					if c.Type == html.ElementNode && isBlockElement(c.Data) {
-						if isStructuralBlock(c.Data) && n.Parent != nil {
-							// Structural blocks (table, pre, etc.) must keep their
-							// internal structure. Move them above all phrasing ancestors.
-							n.RemoveChild(c)
-							target := n
-							for target.Parent != nil && target.Parent.Type == html.ElementNode && isPhrasingElement(target.Parent.Data) {
-								target = target.Parent
-							}
-							if target.Parent != nil {
-								target.Parent.InsertBefore(c, target)
-							}
-						} else {
-							// Simple wrappers (p, div, etc.): unwrap children inline
-							for cc := c.FirstChild; cc != nil; {
-								cnext := cc.NextSibling
-								c.RemoveChild(cc)
-								n.InsertBefore(cc, c)
-								cc = cnext
-							}
-							n.RemoveChild(c)
-						}
-					}
-					c = next
-				}
-			}
-
-			// Fix <dl> content model: must contain dt/dd pairs.
-			// - <dd> before any <dt> needs a <dt> inserted before it
-			// - <dt> at end without following <dd> needs a <dd> appended
-			// - Bare text and disallowed children are wrapped appropriately
-			if n.Data == "dl" {
-				// First pass: wrap bare text and disallowed elements
-				for c := n.FirstChild; c != nil; {
-					next := c.NextSibling
-					if c.Type == html.TextNode {
-						if strings.TrimSpace(c.Data) != "" {
-							dt := &html.Node{Type: html.ElementNode, Data: "dt", DataAtom: atom.Dt}
-							n.InsertBefore(dt, c)
-							n.RemoveChild(c)
-							dt.AppendChild(c)
-						}
-					} else if c.Type == html.ElementNode {
-						if c.Data != "dt" && c.Data != "dd" && c.Data != "div" {
-							dd := &html.Node{Type: html.ElementNode, Data: "dd", DataAtom: atom.Dd}
-							n.InsertBefore(dd, c)
-							n.RemoveChild(c)
-							dd.AppendChild(c)
-						}
-					}
-					c = next
-				}
-				// Second pass: ensure dd comes after dt (not before)
-				seenDt := false
-				for c := n.FirstChild; c != nil; c = c.NextSibling {
-					if c.Type == html.ElementNode {
-						if c.Data == "dt" {
-							seenDt = true
-						} else if c.Data == "dd" && !seenDt {
-							// dd before any dt: insert empty dt before it
-							dt := &html.Node{Type: html.ElementNode, Data: "dt", DataAtom: atom.Dt}
-							n.InsertBefore(dt, c)
-							seenDt = true
-						}
-					}
-				}
-				// Third pass: ensure last dt has a following dd
-				var lastDt *html.Node
-				for c := n.FirstChild; c != nil; c = c.NextSibling {
-					if c.Type == html.ElementNode {
-						if c.Data == "dt" {
-							lastDt = c
-						} else if c.Data == "dd" || c.Data == "div" {
-							lastDt = nil
-						}
-					}
-				}
-				if lastDt != nil {
-					dd := &html.Node{Type: html.ElementNode, Data: "dd", DataAtom: atom.Dd}
-					if lastDt.NextSibling != nil {
-						n.InsertBefore(dd, lastDt.NextSibling)
-					} else {
-						n.AppendChild(dd)
-					}
-				}
-				// Ensure <dl> has at least one dt/dd pair
-				hasDt := false
-				hasDd := false
-				for c := n.FirstChild; c != nil; c = c.NextSibling {
-					if c.Type == html.ElementNode {
-						if c.Data == "dt" {
-							hasDt = true
-						}
-						if c.Data == "dd" || c.Data == "div" {
-							hasDd = true
-						}
-					}
-				}
-				if !hasDt {
-					dt := &html.Node{Type: html.ElementNode, Data: "dt", DataAtom: atom.Dt}
-					if n.FirstChild != nil {
-						n.InsertBefore(dt, n.FirstChild)
-					} else {
-						n.AppendChild(dt)
-					}
-				}
-				if !hasDd {
-					dd := &html.Node{Type: html.ElementNode, Data: "dd", DataAtom: atom.Dd}
-					n.AppendChild(dd)
-				}
-			}
-
-			// Fix <figcaption> outside <figure>: convert to <p>
-			if n.Data == "figcaption" {
-				if n.Parent == nil || n.Parent.Data != "figure" {
-					n.Data = "p"
-					n.DataAtom = atom.P
-				}
-			}
-		}
-
-		for c := n.FirstChild; c != nil; {
-			next := c.NextSibling
-			if result := clean(c); result == nil {
-				n.RemoveChild(c)
-			} else if result != c {
-				n.InsertBefore(result, c)
-				n.RemoveChild(c)
-			}
-			c = next
-		}
-		return n
-	}
-	clean(doc)
+	s.clean(doc)
 
 	// Render as XHTML
 	var buf bytes.Buffer
@@ -486,6 +497,29 @@ func sanitizeForXHTML(htmlStr string) string {
 	}
 
 	return result
+}
+
+// collectIDs collects all sanitized ID values from the document tree.
+func collectIDs(doc *html.Node) map[string]bool {
+	ids := map[string]bool{}
+	var walk func(*html.Node)
+	walk = func(n *html.Node) {
+		if n.Type == html.ElementNode {
+			for _, a := range n.Attr {
+				if a.Key == "id" {
+					cleaned := sanitizeID(a.Val)
+					if cleaned != "" {
+						ids[cleaned] = true
+					}
+				}
+			}
+		}
+		for c := n.FirstChild; c != nil; c = c.NextSibling {
+			walk(c)
+		}
+	}
+	walk(doc)
+	return ids
 }
 
 // renderXHTML renders an html.Node tree as XHTML (self-closing void elements).
