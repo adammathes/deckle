@@ -76,12 +76,6 @@ correctly but is the densest part of the codebase.
 ## APPROVED
 *(Large work items approved by humans.)*
 
----
-
-## PROPOSED
-
-*(Potential work identified during AI-driven stress testing. Not yet approved.)*
-
 ### Extract sanitizeForXHTML into its own file
 
 `epub.go` currently mixes two concerns: EPUB assembly (`buildEpub`,
@@ -175,4 +169,12 @@ This would complement the stress testing approach (real-world pages) with
 randomized input testing.
 
 **Risk**: None. Additive testing only.
+
+
+---
+
+## PROPOSED
+
+*(Potential work identified during AI-driven stress testing. Not yet approved.)*
+
 
