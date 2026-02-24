@@ -22,6 +22,29 @@ const defaultUA = "Mozilla/5.0 (X11; Linux x86_64; rv:133.0) Gecko/20100101 Fire
 // error. Set from the -max-response-size CLI flag; 0 means unlimited.
 var maxResponseBytes int64 = 128 * 1024 * 1024 // 128 MB default
 
+// fetchProxyURL is the HTTP proxy URL for all outgoing requests.
+// When non-empty, deckle falls back to standard TLS (no uTLS fingerprinting)
+// so the request can tunnel through the proxy. Set by the --proxy CLI flag.
+var fetchProxyURL string
+
+// newProxyClient creates an HTTP client that routes through the given proxy
+// address using standard TLS. If proxyAddr is empty, it creates a direct
+// (no-proxy) client with standard TLS.
+func newProxyClient(proxyAddr string, timeout time.Duration) *http.Client {
+	transport := &http.Transport{
+		DialContext: safeDialContext(&net.Dialer{Timeout: timeout}),
+	}
+	if proxyAddr != "" {
+		if proxyURL, err := url.Parse(proxyAddr); err == nil {
+			transport.Proxy = http.ProxyURL(proxyURL)
+		}
+	}
+	return &http.Client{
+		Timeout:   timeout,
+		Transport: transport,
+	}
+}
+
 // readLimited reads up to maxResponseBytes from r. If the response exceeds
 // the limit, it returns an error. If maxResponseBytes is 0, it reads without
 // limit (equivalent to io.ReadAll).
@@ -173,7 +196,11 @@ func fetchHTML(rawURL string, timeout time.Duration, userAgent string) ([]byte, 
 	}
 
 	var client *http.Client
-	if parsed.Scheme == "https" {
+	if fetchProxyURL != "" {
+		// When a proxy is configured, fall back to standard TLS so the request
+		// can tunnel through the proxy (uTLS cannot negotiate CONNECT tunnels).
+		client = newProxyClient(fetchProxyURL, timeout)
+	} else if parsed.Scheme == "https" {
 		client = newBrowserClient(timeout)
 	} else {
 		client = &http.Client{

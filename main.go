@@ -310,6 +310,7 @@ func main() {
 	coverStyle := flag.String("cover", "collage", "Cover style: 'collage', 'pattern', or 'none'")
 	concurrency := flag.Int("concurrency", 5, "Max concurrent downloads for articles and images")
 	maxRespSize := flag.Int64("max-response-size", 128*1024*1024, "Maximum allowed HTTP response size in bytes (0 for unlimited)")
+	proxy := flag.String("proxy", "", "HTTP proxy URL (falls back to standard TLS, e.g. http://proxy.example.com:8080)")
 	silent := flag.Bool("silent", false, "Suppress all output except errors (for pipeline use)")
 	flag.Usage = func() {
 		fmt.Fprintf(os.Stderr, "Usage: deckle [options] <URL>\n")
@@ -325,6 +326,7 @@ func main() {
 	}
 
 	maxResponseBytes = *maxRespSize
+	fetchProxyURL = *proxy
 
 	conc := *concurrency
 	if conc < 1 {

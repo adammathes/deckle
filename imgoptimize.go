@@ -167,9 +167,13 @@ var (
 var extImgRe = regexp.MustCompile(`(<img\b[^>]*?\bsrc\s*=\s*")(https?://[^"]+)(")`)
 
 // getImageClient returns the HTTP client for fetching external images.
-// Uses fetchImageClient (browser TLS fingerprint) if available, otherwise
-// falls back to a plain client (for tests).
+// When a proxy is configured, uses a standard-TLS proxy-aware client.
+// Otherwise uses fetchImageClient (browser TLS fingerprint) when available,
+// falling back to a plain client (for tests).
 func getImageClient() *http.Client {
+	if fetchProxyURL != "" {
+		return newProxyClient(fetchProxyURL, 30*time.Second)
+	}
 	if fetchImageClient != nil {
 		return fetchImageClient
 	}
