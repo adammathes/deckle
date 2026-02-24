@@ -342,6 +342,53 @@ is long enough to satisfy the readability content extraction algorithm.</p>
 	}
 }
 
+// TestRun_MarkdownMode_SkipsExternalImages verifies that markdown mode does not
+// download external image URLs referenced in article HTML.
+func TestRun_MarkdownMode_SkipsExternalImages(t *testing.T) {
+	// Image server counts how many times it is hit
+	imageHits := 0
+	imgSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		imageHits++
+		w.Header().Set("Content-Type", "image/png")
+		w.Write(makePNG(10, 10, color.NRGBA{100, 100, 100, 255}))
+	}))
+	defer imgSrv.Close()
+
+	pageHTML := `<!DOCTYPE html>
+<html><head><title>SkipImg Test</title></head>
+<body><article>
+<h1>SkipImg Test</h1>
+<p>Article with an external image that should not be downloaded in markdown mode.
+This paragraph provides sufficient content for readability extraction.</p>
+<img src="` + imgSrv.URL + `/photo.png" alt="external photo">
+<p>More article text after the image element for content density.</p>
+</article></body></html>`
+
+	articleSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.Write([]byte(pageHTML))
+	}))
+	defer articleSrv.Close()
+
+	outFile := filepath.Join(t.TempDir(), "out.md")
+	cfg := cliConfig{
+		opts:         optimizeOpts{maxWidth: 800, quality: 60},
+		output:       outFile,
+		markdownMode: true,
+		timeout:      5 * time.Second,
+		userAgent:    "test-agent",
+		concurrency:  2,
+		args:         []string{articleSrv.URL},
+	}
+
+	if err := run(cfg); err != nil {
+		t.Fatalf("run() error: %v", err)
+	}
+	if imageHits > 0 {
+		t.Errorf("markdown mode should not download external images, but image server was hit %d time(s)", imageHits)
+	}
+}
+
 // makeArticleHTML builds a minimal HTML article page with sufficient content
 // for readability extraction.
 func makeArticleHTML(title, extraContent string) string {

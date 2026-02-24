@@ -73,9 +73,10 @@ func isAnimatedGIF(data []byte) bool {
 }
 
 type optimizeOpts struct {
-	maxWidth  int
-	quality   int
-	grayscale bool
+	maxWidth       int
+	quality        int
+	grayscale      bool
+	skipImageFetch bool // skip downloading external images (e.g. markdown mode)
 }
 
 // optimizeImage returns the new data URI string and raw JPEG byte count,
@@ -166,9 +167,13 @@ var (
 var extImgRe = regexp.MustCompile(`(<img\b[^>]*?\bsrc\s*=\s*")(https?://[^"]+)(")`)
 
 // getImageClient returns the HTTP client for fetching external images.
-// Uses fetchImageClient (browser TLS fingerprint) if available, otherwise
-// falls back to a plain client (for tests).
+// When a proxy is configured, uses a standard-TLS proxy-aware client.
+// Otherwise uses fetchImageClient (browser TLS fingerprint) when available,
+// falling back to a plain client (for tests).
 func getImageClient() *http.Client {
+	if fetchProxyURL != "" {
+		return newProxyClient(fetchProxyURL, 30*time.Second)
+	}
 	if fetchImageClient != nil {
 		return fetchImageClient
 	}
@@ -421,8 +426,11 @@ func processArticleImages(html []byte, opts optimizeOpts, concurrency int) []byt
 	// Promote lazy-loaded images (data-src → src)
 	html = promoteLazySrc(html)
 
-	// Fetch external image URLs and embed as data URIs
-	html = fetchAndEmbed(html, concurrency)
+	// Fetch external image URLs and embed as data URIs.
+	// Skipped in markdown mode: images stay as external URLs there.
+	if !opts.skipImageFetch {
+		html = fetchAndEmbed(html, concurrency)
+	}
 
 	// Collapse <picture> elements into single <img> tags
 	html = pictureRe.ReplaceAllFunc(html, func(match []byte) []byte {
@@ -456,26 +464,29 @@ func processArticleImages(html []byte, opts optimizeOpts, concurrency int) []byt
 			}
 		}
 
-		// Second try: external URLs in srcset (e.g. Medium)
-		imgURL := pickBestSrcsetURL(match)
-		if imgURL != "" {
-			data, mime, err := fetchImage(imgURL)
-			if err != nil {
-				fmt.Fprintf(logOut, "Warning: could not fetch picture image %s: %v\n", imgURL, err)
-				return match
-			}
+		// Second try: external URLs in srcset (e.g. Medium).
+		// Skip when image fetching is disabled (markdown mode).
+		if !opts.skipImageFetch {
+			imgURL := pickBestSrcsetURL(match)
+			if imgURL != "" {
+				data, mime, err := fetchImage(imgURL)
+				if err != nil {
+					fmt.Fprintf(logOut, "Warning: could not fetch picture image %s: %v\n", imgURL, err)
+					return match
+				}
 
-			uri, jpegLen := optimizeImage(data, mime, opts)
-			if uri != "" {
-				st.originalTotal += int64(len(data))
-				st.optimizedTotal += int64(jpegLen)
-				st.count++
-				return []byte(fmt.Sprintf(`<img src="%s" alt="%s">`, uri, alt))
-			}
+				uri, jpegLen := optimizeImage(data, mime, opts)
+				if uri != "" {
+					st.originalTotal += int64(len(data))
+					st.optimizedTotal += int64(jpegLen)
+					st.count++
+					return []byte(fmt.Sprintf(`<img src="%s" alt="%s">`, uri, alt))
+				}
 
-			// Can't optimize (SVG/AVIF) — embed as-is
-			encoded := base64.StdEncoding.EncodeToString(data)
-			return []byte(fmt.Sprintf(`<img src="data:%s;base64,%s" alt="%s">`, mime, encoded, alt))
+				// Can't optimize (SVG/AVIF) — embed as-is
+				encoded := base64.StdEncoding.EncodeToString(data)
+				return []byte(fmt.Sprintf(`<img src="data:%s;base64,%s" alt="%s">`, mime, encoded, alt))
+			}
 		}
 
 		return match

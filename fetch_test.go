@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -260,5 +261,93 @@ func TestFetchHTML_UnlimitedSizeZero(t *testing.T) {
 	}
 	if len(body) != 50000 {
 		t.Errorf("got %d bytes, want 50000", len(body))
+	}
+}
+
+// --- proxy tests ---
+
+// TestNewProxyClient_NoProxy verifies newProxyClient with an empty proxy addr
+// returns a working HTTP client (falls back to direct).
+func TestNewProxyClient_NoProxy(t *testing.T) {
+	client := newProxyClient("", 5*time.Second)
+	if client == nil {
+		t.Fatal("expected non-nil client")
+	}
+}
+
+// TestNewProxyClient_Fetch verifies newProxyClient can fetch through an HTTP proxy.
+func TestNewProxyClient_Fetch(t *testing.T) {
+	const want = "<html>proxied</html>"
+
+	// Target server
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(want))
+	}))
+	defer target.Close()
+
+	// Minimal CONNECT-free HTTP proxy (forwards GET requests)
+	proxy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		resp, err := http.Get(r.URL.String())
+		if err != nil {
+			http.Error(w, err.Error(), 502)
+			return
+		}
+		defer resp.Body.Close()
+		body, _ := io.ReadAll(resp.Body)
+		w.Write(body)
+	}))
+	defer proxy.Close()
+
+	client := newProxyClient(proxy.URL, 5*time.Second)
+	resp, err := client.Get(target.URL)
+	if err != nil {
+		t.Fatalf("GET via proxy: %v", err)
+	}
+	defer resp.Body.Close()
+	got, _ := io.ReadAll(resp.Body)
+	if string(got) != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+// TestFetchHTML_WithProxy verifies that fetchHTML routes through a proxy when
+// fetchProxyURL is set, falling back to standard TLS.
+func TestFetchHTML_WithProxy(t *testing.T) {
+	saved := fetchProxyURL
+	defer func() { fetchProxyURL = saved }()
+
+	const wantBody = "<html><body>proxied content</body></html>"
+
+	// Target HTTP server
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(wantBody))
+	}))
+	defer target.Close()
+
+	// Proxy server that forwards to the target
+	proxied := false
+	proxy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		proxied = true
+		resp, err := http.Get(r.URL.String())
+		if err != nil {
+			http.Error(w, err.Error(), 502)
+			return
+		}
+		defer resp.Body.Close()
+		body, _ := io.ReadAll(resp.Body)
+		w.Write(body)
+	}))
+	defer proxy.Close()
+
+	fetchProxyURL = proxy.URL
+	body, _, err := fetchHTML(target.URL, 5*time.Second, defaultUA)
+	if err != nil {
+		t.Fatalf("fetchHTML with proxy: %v", err)
+	}
+	if string(body) != wantBody {
+		t.Errorf("got %q, want %q", body, wantBody)
+	}
+	if !proxied {
+		t.Error("request did not go through proxy")
 	}
 }

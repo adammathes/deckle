@@ -846,3 +846,49 @@ func TestFetchAndEmbed_ExceedsSizeLimit(t *testing.T) {
 		t.Error("original URL should be preserved when image exceeds limit")
 	}
 }
+
+// TestProcessArticleImages_SkipImageFetch verifies that when skipImageFetch
+// is true, external image URLs are not downloaded and picture elements with
+// srcset URLs are not fetched either.
+func TestProcessArticleImages_SkipImageFetch(t *testing.T) {
+	fetched := false
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fetched = true
+		w.Header().Set("Content-Type", "image/png")
+		w.Write(makePNG(10, 10, color.NRGBA{100, 100, 100, 255}))
+	}))
+	defer srv.Close()
+
+	html := []byte(`<img src="` + srv.URL + `/image.png" alt="ext">`)
+	opts := optimizeOpts{maxWidth: 800, quality: 60, skipImageFetch: true}
+	result := processArticleImages(html, opts, 1)
+
+	if fetched {
+		t.Error("skipImageFetch: external image should not have been downloaded")
+	}
+	// Original external URL must survive unchanged
+	if !strings.Contains(string(result), srv.URL+"/image.png") {
+		t.Errorf("skipImageFetch: original URL should be preserved, got: %s", result)
+	}
+}
+
+// TestProcessArticleImages_SkipImageFetch_Picture verifies that <picture>
+// elements with srcset URLs are not fetched when skipImageFetch is true.
+func TestProcessArticleImages_SkipImageFetch_Picture(t *testing.T) {
+	fetched := false
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fetched = true
+		w.Header().Set("Content-Type", "image/jpeg")
+		w.Write(makeJPEG(10, 10, color.NRGBA{100, 100, 100, 255}))
+	}))
+	defer srv.Close()
+
+	html := []byte(`<picture><source srcset="` + srv.URL + `/img.jpg 800w"><img src="` + srv.URL + `/img.jpg" alt="photo"></picture>`)
+	opts := optimizeOpts{maxWidth: 800, quality: 60, skipImageFetch: true}
+	result := processArticleImages(html, opts, 1)
+
+	if fetched {
+		t.Error("skipImageFetch: picture srcset image should not have been downloaded")
+	}
+	_ = result
+}

@@ -254,8 +254,13 @@ func run(cfg cliConfig) error {
 			return fmt.Errorf("no URLs provided")
 		}
 
+		// Markdown output uses original image URLs, not embedded data URIs,
+		// so there is no point downloading images.
+		mdOpts := cfg.opts
+		mdOpts.skipImageFetch = true
+
 		if len(urls) == 1 {
-			final, _, _, err := processURL(urls[0], cfg.opts, cfg.timeout, cfg.userAgent, cfg.titleOverride, cfg.concurrency)
+			final, _, _, err := processURL(urls[0], mdOpts, cfg.timeout, cfg.userAgent, cfg.titleOverride, cfg.concurrency)
 			if err != nil {
 				return err
 			}
@@ -267,7 +272,9 @@ func run(cfg cliConfig) error {
 		}
 
 		// Multiple URLs: fetch in parallel, concatenate with separators.
-		articles := fetchMultipleArticles(urls, cfg)
+		mdCfg := cfg
+		mdCfg.opts = mdOpts
+		articles := fetchMultipleArticles(urls, mdCfg)
 		if len(articles) == 0 {
 			return fmt.Errorf("no articles converted")
 		}
@@ -303,6 +310,7 @@ func main() {
 	coverStyle := flag.String("cover", "collage", "Cover style: 'collage', 'pattern', or 'none'")
 	concurrency := flag.Int("concurrency", 5, "Max concurrent downloads for articles and images")
 	maxRespSize := flag.Int64("max-response-size", 128*1024*1024, "Maximum allowed HTTP response size in bytes (0 for unlimited)")
+	proxy := flag.String("proxy", "", "HTTP proxy URL (falls back to standard TLS, e.g. http://proxy.example.com:8080)")
 	silent := flag.Bool("silent", false, "Suppress all output except errors (for pipeline use)")
 	flag.Usage = func() {
 		fmt.Fprintf(os.Stderr, "Usage: deckle [options] <URL>\n")
@@ -318,6 +326,7 @@ func main() {
 	}
 
 	maxResponseBytes = *maxRespSize
+	fetchProxyURL = *proxy
 
 	conc := *concurrency
 	if conc < 1 {

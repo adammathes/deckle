@@ -54,35 +54,27 @@ correctly but is the densest part of the codebase.
   validation against arbitrary web sources are checked in under `scripts/` and
   `docs/stress-testing.md`.
 
+- **Skip image downloads in markdown mode**: Added `skipImageFetch bool` to
+  `optimizeOpts`. When true, `fetchAndEmbed` and the `<picture>` srcset fetch
+  path are skipped. `run()` sets this flag automatically in markdown mode.
+  External image URLs are preserved as-is (markdown renders them without needing
+  embedded data URIs). Covered by `TestProcessArticleImages_SkipImageFetch*`
+  and `TestRun_MarkdownMode_SkipsExternalImages`.
+
+- **Add CI epubcheck validation**: `sudo apt-get install -y epubcheck` added to
+  `.github/workflows/ci.yml` before the test step. The existing
+  `TestBuildEpub_EpubCheck` test now runs (rather than skipping) on every CI
+  push/PR, catching EPUB 3 regressions automatically.
+
+- **Proxy-aware fetching**: Added `--proxy` flag and `fetchProxyURL` global.
+  When set, all outgoing HTTP requests (articles and images) use a standard-TLS
+  `http.Transport` with `http.ProxyURL`, bypassing uTLS fingerprinting which
+  cannot negotiate CONNECT tunnels. uTLS fingerprinting is preserved when no
+  proxy is configured. Covered by `TestNewProxyClient_*` and
+  `TestFetchHTML_WithProxy`.
+
 ## APPROVED
 *(Large work items approved by humans.)*
-
-### SKIP IMAGE DOWNLOADS IN MARKDOWN MODE
-
-In markdown mode, the images are not needed as they are not embedded in the doc, the original URLs are used. Skip the image downloads!
-
-### Add CI epubcheck validation
-
-The `TestBuildEpub_EpubCheck` test runs epubcheck but skips when the tool
-isn't installed. Adding epubcheck to CI would catch EPUB regressions
-automatically. This could use the existing test or a dedicated stress test
-step with a small corpus of known-tricky HTML fixtures.
-
-**Risk**: None. CI configuration only.
-
-### Proxy-aware fetching
-
-Deckle's uTLS fingerprinting in `fetch.go` bypasses HTTP proxies. The
-stress test required a Python script + local HTTP server to work around
-this. Adding proxy support (e.g. `HTTP_PROXY` / `HTTPS_PROXY` env vars)
-or a `--proxy` flag would make deckle work in more environments. This
-would require either tunneling TLS through the proxy or falling back to
-standard TLS when a proxy is detected.
-
-DECISION: add --proxy flag, fall back to standard TLS when proxy is detected.
-
-**Risk**: Medium. TLS fingerprinting is a core anti-detection feature;
-proxy support would need to preserve that where possible.
 
 ---
 
