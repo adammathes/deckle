@@ -48,14 +48,41 @@ correctly but is the densest part of the codebase.
 | `readability.go` | 39 | Readability extraction wrapper |
 
 ---
-
-## APPROVED
-
-*(Large work items approved by humans.)*
+## COMPLETED
 
 - **Stress test infrastructure**: Scripts and documentation for running epubcheck
   validation against arbitrary web sources are checked in under `scripts/` and
   `docs/stress-testing.md`.
+
+## APPROVED
+*(Large work items approved by humans.)*
+
+### SKIP IMAGE DOWNLOADS IN MARKDOWN MODE
+
+In markdown mode, the images are not needed as they are not embedded in the doc, the original URLs are used. Skip the image downloads!
+
+### Add CI epubcheck validation
+
+The `TestBuildEpub_EpubCheck` test runs epubcheck but skips when the tool
+isn't installed. Adding epubcheck to CI would catch EPUB regressions
+automatically. This could use the existing test or a dedicated stress test
+step with a small corpus of known-tricky HTML fixtures.
+
+**Risk**: None. CI configuration only.
+
+### Proxy-aware fetching
+
+Deckle's uTLS fingerprinting in `fetch.go` bypasses HTTP proxies. The
+stress test required a Python script + local HTTP server to work around
+this. Adding proxy support (e.g. `HTTP_PROXY` / `HTTPS_PROXY` env vars)
+or a `--proxy` flag would make deckle work in more environments. This
+would require either tunneling TLS through the proxy or falling back to
+standard TLS when a proxy is detected.
+
+DECISION: add --proxy flag, fall back to standard TLS when proxy is detected.
+
+**Risk**: Medium. TLS fingerprinting is a core anti-detection feature;
+proxy support would need to preserve that where possible.
 
 ---
 
@@ -63,7 +90,7 @@ correctly but is the densest part of the codebase.
 
 *(Potential work identified during AI-driven stress testing. Not yet approved.)*
 
-### 1. Extract sanitizeForXHTML into its own file
+### Extract sanitizeForXHTML into its own file
 
 `epub.go` currently mixes two concerns: EPUB assembly (`buildEpub`,
 `buildTOCBody`, `extractImages`) and HTML→XHTML sanitization
@@ -81,7 +108,7 @@ The helpers that would move: `stripInvalidXMLChars`, `sanitizeDimensionAttr`,
 
 **Risk**: Low. Pure file reorganization, no behavior change.
 
-### 2. Consolidate HTML cleaning between imgoptimize.go and epub.go
+### Consolidate HTML cleaning between imgoptimize.go and epub.go
 
 Both `cleanForEpub` (regex-based) and `sanitizeForXHTML` (DOM-based)
 independently handle overlapping concerns:
@@ -112,7 +139,7 @@ Options:
 **Risk**: Medium. Changing the pipeline order could surface edge cases.
 Would need a stress test run to validate.
 
-### 3. Break up the sanitizeForXHTML closure
+### Break up the sanitizeForXHTML closure
 
 The inner `clean()` closure is ~260 lines handling many distinct concerns
 via a long chain of if/else blocks. Refactoring into a struct with methods
@@ -141,7 +168,7 @@ func (s *xhtmlSanitizer) fixDLContent(n *html.Node) { ... }
 (removing/inserting nodes during traversal). Would need full test suite +
 stress test to validate.
 
-### 4. Add fuzz testing for sanitizeForXHTML
+### Add fuzz testing for sanitizeForXHTML
 
 `sanitizeForXHTML` processes arbitrary HTML from the wild internet. Go's
 built-in fuzzing (`go test -fuzz`) could find panics or invalid output
@@ -157,23 +184,3 @@ randomized input testing.
 
 **Risk**: None. Additive testing only.
 
-### 5. Add CI epubcheck validation
-
-The `TestBuildEpub_EpubCheck` test runs epubcheck but skips when the tool
-isn't installed. Adding epubcheck to CI would catch EPUB regressions
-automatically. This could use the existing test or a dedicated stress test
-step with a small corpus of known-tricky HTML fixtures.
-
-**Risk**: None. CI configuration only.
-
-### 6. Proxy-aware fetching
-
-Deckle's uTLS fingerprinting in `fetch.go` bypasses HTTP proxies. The
-stress test required a Python script + local HTTP server to work around
-this. Adding proxy support (e.g. `HTTP_PROXY` / `HTTPS_PROXY` env vars)
-or a `--proxy` flag would make deckle work in more environments. This
-would require either tunneling TLS through the proxy or falling back to
-standard TLS when a proxy is detected.
-
-**Risk**: Medium. TLS fingerprinting is a core anti-detection feature;
-proxy support would need to preserve that where possible.
