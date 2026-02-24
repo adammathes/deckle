@@ -214,8 +214,8 @@ func TestIsAllowedAttr(t *testing.T) {
 		{"style", "style", "color: red", true},
 		{"colspan", "colspan", "2", true},
 		{"rel", "rel", "noopener", true},
-		{"aria-label", "aria-label", "Close", true},
-		{"aria-hidden", "aria-hidden", "true", true},
+		{"aria-label", "aria-label", "Close", false},
+		{"aria-hidden", "aria-hidden", "true", false},
 		{"epub:type", "epub:type", "chapter", true},
 		{"data-custom", "data-custom", "value", false},
 		{"onclick", "onclick", "alert(1)", false},
@@ -277,13 +277,68 @@ func TestSanitizeForXHTML_VoidElements(t *testing.T) {
 }
 
 func TestSanitizeForXHTML_AriaAndEpubAttrs(t *testing.T) {
-	input := `<section aria-label="chapter" class="main">content</section>`
+	input := `<section aria-label="chapter" class="main" epub:type="chapter">content</section>`
 	result := sanitizeForXHTML(input)
-	if !strings.Contains(result, `aria-label="chapter"`) {
-		t.Error("aria-label should be preserved")
+	if strings.Contains(result, `aria-label="chapter"`) {
+		t.Error("aria-label should be stripped")
 	}
 	if !strings.Contains(result, `class="main"`) {
 		t.Error("class should be preserved")
+	}
+	if !strings.Contains(result, `epub:type="chapter"`) {
+		t.Error("epub:type should be preserved")
+	}
+}
+
+func TestSanitizeForXHTML_StrictWhitelist(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+		want  string // partial match check
+		not   string // should not contain
+	}{
+		{
+			name:  "removes script",
+			input: `<div><script>alert(1)</script><p>text</p></div>`,
+			want:  `<p>text</p>`,
+			not:   "script",
+		},
+		{
+			name:  "removes object",
+			input: `<div><object data="foo"></object><p>text</p></div>`,
+			want:  `<p>text</p>`,
+			not:   "object",
+		},
+		{
+			name:  "converts video to link",
+			input: `<div><video src="movie.mp4"></video></div>`,
+			want:  `<a href="movie.mp4">[Media: movie.mp4]</a>`,
+			not:   "video",
+		},
+		{
+			name:  "unwraps nested p in h1",
+			input: `<h1><p>Title</p></h1>`,
+			want:  `<h1>Title</h1>`,
+			not:   "<p>",
+		},
+		{
+			name:  "unwraps div in span",
+			input: `<span>start <div>middle</div> end</span>`,
+			want:  `<span>start middle end</span>`, // div stripped, content merged
+			not:   "<div>",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := sanitizeForXHTML(tt.input)
+			if tt.want != "" && !strings.Contains(got, tt.want) {
+				t.Errorf("got %q, want substring %q", got, tt.want)
+			}
+			if tt.not != "" && strings.Contains(got, tt.not) {
+				t.Errorf("got %q, should not contain %q", got, tt.not)
+			}
+		})
 	}
 }
 
