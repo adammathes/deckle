@@ -69,6 +69,7 @@ deckle -grayscale -o article.html https://example.com/article
   -timeout DURATION     HTTP fetch timeout (default: 30s)
   -user-agent STRING    HTTP User-Agent header
   -concurrency INT      Max concurrent downloads for articles and images (default: 5)
+  -cover STRING         Cover style: 'collage', 'pattern', 'none' (default: 'collage')
   -silent               Suppress all output except errors (for pipeline use)
 ```
 

@@ -89,7 +89,7 @@ func TestBuildEpub_Basic(t *testing.T) {
 	}
 
 	outPath := filepath.Join(t.TempDir(), "test.epub")
-	err := buildEpub(articles, "Test Book", outPath)
+	err := buildEpub(articles, "Test Book", outPath, "collage")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -398,7 +398,7 @@ func TestBuildEpub_NoTitleFallback(t *testing.T) {
 		{HTML: `<html><body><p>No heading here.</p></body></html>`, Title: ""},
 	}
 	outPath := filepath.Join(t.TempDir(), "notitle.epub")
-	err := buildEpub(articles, "Fallback Title", outPath)
+	err := buildEpub(articles, "Fallback Title", outPath, "collage")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -436,7 +436,7 @@ func TestBuildEpub_EpubCheck(t *testing.T) {
 	}
 
 	outPath := filepath.Join(t.TempDir(), "check.epub")
-	err := buildEpub(articles, "EpubCheck Test", outPath)
+	err := buildEpub(articles, "EpubCheck Test", outPath, "collage")
 	if err != nil {
 		t.Fatal(err)
 	}
