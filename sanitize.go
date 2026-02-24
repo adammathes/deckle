@@ -262,6 +262,7 @@ func sanitizeForXHTML(htmlStr string) string {
 
 			// Special check for images: must have src, and src must not be
 			// an external URL (remote resources are not allowed in EPUB).
+			// AVIF images are also stripped (e-readers can't display them).
 			if n.Data == "img" {
 				hasSrc := false
 				for _, a := range n.Attr {
@@ -269,6 +270,10 @@ func sanitizeForXHTML(htmlStr string) string {
 						src := strings.TrimSpace(a.Val)
 						// Remove images with external URLs (RSC-006)
 						if strings.HasPrefix(src, "http://") || strings.HasPrefix(src, "https://") {
+							return nil
+						}
+						// Remove AVIF images (not renderable by e-readers)
+						if strings.HasPrefix(src, "data:image/avif") {
 							return nil
 						}
 						hasSrc = true

@@ -515,3 +515,27 @@ func TestSanitizeForXHTML_PreInP(t *testing.T) {
 		t.Error("pre content should be preserved")
 	}
 }
+
+func TestSanitizeForXHTML_StripAVIFImages(t *testing.T) {
+	// AVIF images are not renderable by e-readers and should be removed.
+	input := `<p>before</p><img src="data:image/avif;base64,abc" alt="test"/><p>after</p>`
+	result := sanitizeForXHTML(input)
+	if strings.Contains(result, "avif") {
+		t.Error("AVIF data URI images should be stripped by the sanitizer")
+	}
+	if !strings.Contains(result, "before") || !strings.Contains(result, "after") {
+		t.Error("surrounding content should be preserved")
+	}
+}
+
+func TestSanitizeForXHTML_StripInlineSVG(t *testing.T) {
+	// Inline <svg> elements should be removed by the element whitelist.
+	input := `<p>before</p><svg xmlns="http://www.w3.org/2000/svg"><circle r="10"/></svg><p>after</p>`
+	result := sanitizeForXHTML(input)
+	if strings.Contains(result, "<svg") {
+		t.Error("inline SVG should be stripped by the sanitizer")
+	}
+	if !strings.Contains(result, "before") || !strings.Contains(result, "after") {
+		t.Error("surrounding content should be preserved")
+	}
+}

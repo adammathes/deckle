@@ -572,47 +572,15 @@ func TestFetchImage_ContentTypeWithCharset(t *testing.T) {
 	}
 }
 
-func TestCleanForEpub_RemovesAVIF(t *testing.T) {
-	html := []byte(`<p>before</p><img src="data:image/avif;base64,abc" alt="test"/><p>after</p>`)
-	result := cleanForEpub(html)
-	if strings.Contains(string(result), "avif") {
-		t.Error("AVIF images should be removed")
-	}
-	if !strings.Contains(string(result), "before") || !strings.Contains(string(result), "after") {
-		t.Error("surrounding content should be preserved")
-	}
-}
-
-func TestCleanForEpub_RemovesExternalSrcset(t *testing.T) {
-	html := []byte(`<img src="data:image/jpeg;base64,abc" srcset="https://example.com/img.jpg 640w" alt="test">`)
-	result := cleanForEpub(html)
-	if strings.Contains(string(result), "srcset") {
-		t.Error("external srcset attributes should be removed")
-	}
-	if !strings.Contains(string(result), "data:image/jpeg") {
-		t.Error("src should be preserved")
-	}
-}
-
-func TestCleanForEpub_RemovesDataAttrs(t *testing.T) {
-	html := []byte(`<div data-id="123" data-astro-cid-abc=""><p>content</p></div>`)
-	result := cleanForEpub(html)
-	if strings.Contains(string(result), "data-id") || strings.Contains(string(result), "data-astro") {
-		t.Error("data-* attributes should be removed")
-	}
-	if !strings.Contains(string(result), "content") {
-		t.Error("content should be preserved")
-	}
-}
-
-func TestCleanForEpub_RemovesInlineSVG(t *testing.T) {
-	html := []byte(`<p>before</p><svg xmlns="http://www.w3.org/2000/svg"><circle r="10"/></svg><p>after</p>`)
-	result := cleanForEpub(html)
-	if strings.Contains(string(result), "<svg") {
-		t.Error("inline SVG should be removed")
-	}
-	if !strings.Contains(string(result), "before") || !strings.Contains(string(result), "after") {
-		t.Error("surrounding content should be preserved")
+func TestCleanForEpub_IsPassthrough(t *testing.T) {
+	// cleanForEpub is now a no-op — all HTML cleanup concerns are handled
+	// authoritatively by sanitizeForXHTML during EPUB generation.
+	// See TestSanitizeForXHTML_StripAVIFImages, TestSanitizeForXHTML_StripInlineSVG,
+	// and TestSanitizeForXHTML_FiltersAttrs in sanitize_test.go.
+	input := []byte(`<div data-id="123"><img src="data:image/avif;base64,abc"/><svg><circle/></svg><p>content</p></div>`)
+	result := cleanForEpub(input)
+	if string(result) != string(input) {
+		t.Error("cleanForEpub should pass through input unchanged")
 	}
 }
 
