@@ -254,8 +254,13 @@ func run(cfg cliConfig) error {
 			return fmt.Errorf("no URLs provided")
 		}
 
+		// Markdown output uses original image URLs, not embedded data URIs,
+		// so there is no point downloading images.
+		mdOpts := cfg.opts
+		mdOpts.skipImageFetch = true
+
 		if len(urls) == 1 {
-			final, _, _, err := processURL(urls[0], cfg.opts, cfg.timeout, cfg.userAgent, cfg.titleOverride, cfg.concurrency)
+			final, _, _, err := processURL(urls[0], mdOpts, cfg.timeout, cfg.userAgent, cfg.titleOverride, cfg.concurrency)
 			if err != nil {
 				return err
 			}
@@ -267,7 +272,9 @@ func run(cfg cliConfig) error {
 		}
 
 		// Multiple URLs: fetch in parallel, concatenate with separators.
-		articles := fetchMultipleArticles(urls, cfg)
+		mdCfg := cfg
+		mdCfg.opts = mdOpts
+		articles := fetchMultipleArticles(urls, mdCfg)
 		if len(articles) == 0 {
 			return fmt.Errorf("no articles converted")
 		}
