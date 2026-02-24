@@ -166,8 +166,11 @@ func TestNormalizeHeadings_NoBody(t *testing.T) {
 	html := `<h2>Sub</h2><p>text</p>`
 	result := normalizeHeadings(html, "Title", sourceInfo{})
 
-	if !strings.HasPrefix(result, "<h1>Title</h1>") {
-		t.Errorf("expected H1 at start when no body tag, got: %q", result[:50])
+	if !strings.Contains(result, "<!DOCTYPE html>") {
+		t.Error("expected DOCTYPE in output")
+	}
+	if !strings.Contains(result, "<h1>Title</h1>") {
+		t.Error("expected H1 in output")
 	}
 }
 

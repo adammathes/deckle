@@ -141,5 +141,57 @@ func normalizeHeadings(text string, titleOverride string, src sourceInfo) string
 		text = header + text
 	}
 
-	return text
+	return renderFullHTML(text, title, src)
+}
+
+// renderFullHTML wraps the article fragment in a complete HTML document.
+func renderFullHTML(fragment string, title string, src sourceInfo) string {
+	lower := strings.ToLower(fragment)
+	// If it already looks like a full HTML document, don't wrap it again
+	if strings.Contains(lower, "<html") || strings.Contains(lower, "<!doctype") {
+		return fragment
+	}
+
+	// If it already contains a body tag, we should be careful not to double wrap
+	// but we still want to add the head and metadata if they are missing.
+	// For simplicity, if it has <body> we'll assume it's "full enough" or
+	// handled elsewhere, but readability fragments usually don't have it.
+	if strings.Contains(lower, "<body") {
+		return fragment
+	}
+
+	var headExtra strings.Builder
+	if src.Byline != "" {
+		fmt.Fprintf(&headExtra, "\t<meta name=\"author\" content=\"%s\">\n", html.EscapeString(src.Byline))
+	}
+	if src.PublishedTime != nil {
+		fmt.Fprintf(&headExtra, "\t<meta name=\"date\" content=\"%s\">\n", src.PublishedTime.Format(time.RFC3339))
+	}
+
+	return fmt.Sprintf(`<!DOCTYPE html>
+<html>
+<head>
+	<meta charset="utf-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1">
+	<title>%s</title>
+%s	<style>
+		body {
+			font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+			line-height: 1.6;
+			color: #333;
+			max-width: 800px;
+			margin: 0 auto;
+			padding: 2rem 1rem;
+		}
+		img { max-width: 100%%; height: auto; }
+		pre { white-space: pre-wrap; word-wrap: break-word; }
+		.byline { color: #666; font-style: italic; margin-bottom: 2rem; }
+		blockquote { border-left: 4px solid #eee; padding-left: 1rem; margin-left: 0; color: #666; }
+	</style>
+</head>
+<body>
+%s
+</body>
+</html>
+`, html.EscapeString(title), headExtra.String(), fragment)
 }
