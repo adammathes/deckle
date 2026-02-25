@@ -487,6 +487,159 @@ func TestFetchAndEmbed_MIMESniffing(t *testing.T) {
 	}
 }
 
+// --- fetchImageData tests (shared helper) ---
+
+func TestFetchImageData_Success(t *testing.T) {
+	imgData := makePNG(10, 10, color.NRGBA{255, 0, 0, 255})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "image/png")
+		w.Write(imgData)
+	}))
+	defer srv.Close()
+
+	saved := fetchImageClient
+	fetchImageClient = srv.Client()
+	defer func() { fetchImageClient = saved }()
+
+	data, mime, err := fetchImageData(srv.URL + "/img.png")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if mime != "image/png" {
+		t.Errorf("mime = %q, want image/png", mime)
+	}
+	if len(data) == 0 {
+		t.Error("expected non-empty data")
+	}
+}
+
+func TestFetchImageData_404(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(404)
+	}))
+	defer srv.Close()
+
+	saved := fetchImageClient
+	fetchImageClient = srv.Client()
+	defer func() { fetchImageClient = saved }()
+
+	_, _, err := fetchImageData(srv.URL + "/missing.png")
+	if err == nil {
+		t.Error("expected error for 404")
+	}
+	if !strings.Contains(err.Error(), "404") {
+		t.Errorf("expected 404 in error, got: %v", err)
+	}
+}
+
+func TestFetchImageData_MIMESniff(t *testing.T) {
+	imgData := makeJPEG(10, 10, color.NRGBA{0, 0, 255, 255})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/octet-stream")
+		w.Write(imgData)
+	}))
+	defer srv.Close()
+
+	saved := fetchImageClient
+	fetchImageClient = srv.Client()
+	defer func() { fetchImageClient = saved }()
+
+	_, mime, err := fetchImageData(srv.URL + "/img.bin")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(mime, "jpeg") {
+		t.Errorf("expected sniffed JPEG mime, got %q", mime)
+	}
+}
+
+func TestFetchImageData_HTMLEntityURL(t *testing.T) {
+	imgData := makePNG(10, 10, color.NRGBA{0, 255, 0, 255})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "image/png")
+		w.Write(imgData)
+	}))
+	defer srv.Close()
+
+	saved := fetchImageClient
+	fetchImageClient = srv.Client()
+	defer func() { fetchImageClient = saved }()
+
+	// URL with HTML entity that should be unescaped
+	data, mime, err := fetchImageData(srv.URL + "/img.png?a=1&amp;b=2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if mime != "image/png" {
+		t.Errorf("mime = %q, want image/png", mime)
+	}
+	if len(data) == 0 {
+		t.Error("expected non-empty data")
+	}
+}
+
+func TestFetchImageData_ExceedsSizeLimit(t *testing.T) {
+	saved := maxResponseBytes
+	defer func() { maxResponseBytes = saved }()
+	maxResponseBytes = 50
+
+	imgData := makePNG(200, 200, color.NRGBA{255, 0, 0, 255})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "image/png")
+		w.Write(imgData)
+	}))
+	defer srv.Close()
+
+	savedClient := fetchImageClient
+	fetchImageClient = srv.Client()
+	defer func() { fetchImageClient = savedClient }()
+
+	_, _, err := fetchImageData(srv.URL + "/big.png")
+	if err == nil {
+		t.Fatal("expected error when image exceeds size limit")
+	}
+	if !strings.Contains(err.Error(), "exceeds maximum allowed size") {
+		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+// TestFetchOneImage_UsesFetchImageData verifies that fetchOneImage returns
+// consistent results with fetchImageData (regression test for deduplication).
+func TestFetchOneImage_UsesFetchImageData(t *testing.T) {
+	imgData := makePNG(10, 10, color.NRGBA{0, 128, 255, 255})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "image/png")
+		w.Write(imgData)
+	}))
+	defer srv.Close()
+
+	saved := fetchImageClient
+	fetchImageClient = srv.Client()
+	defer func() { fetchImageClient = saved }()
+
+	// fetchOneImage should return the same MIME as fetchImageData
+	mime, encoded := fetchOneImage(srv.URL + "/img.png")
+	if mime != "image/png" {
+		t.Errorf("fetchOneImage mime = %q, want image/png", mime)
+	}
+	if encoded == "" {
+		t.Error("expected non-empty encoded data from fetchOneImage")
+	}
+
+	// Verify the data round-trips correctly
+	data, m, err := fetchImageData(srv.URL + "/img.png")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m != mime {
+		t.Errorf("fetchImageData mime = %q, fetchOneImage mime = %q", m, mime)
+	}
+	expectedEncoded := base64.StdEncoding.EncodeToString(data)
+	if encoded != expectedEncoded {
+		t.Error("fetchOneImage encoded data should match fetchImageData")
+	}
+}
+
 func TestFetchImage_Success(t *testing.T) {
 	imgData := makePNG(10, 10, color.NRGBA{255, 0, 0, 255})
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

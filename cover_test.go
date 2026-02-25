@@ -144,6 +144,33 @@ func TestSplitWords(t *testing.T) {
 	}
 }
 
+func TestSplitWords_Content(t *testing.T) {
+	words := splitWords("  hello\tworld\nnewline  ")
+	if len(words) != 3 {
+		t.Fatalf("expected 3 words, got %d: %v", len(words), words)
+	}
+	if words[0] != "hello" || words[1] != "world" || words[2] != "newline" {
+		t.Errorf("got %v, want [hello world newline]", words)
+	}
+}
+
+func TestSplitWords_Unicode(t *testing.T) {
+	words := splitWords("café résumé naïve")
+	if len(words) != 3 {
+		t.Fatalf("expected 3 words, got %d: %v", len(words), words)
+	}
+	if words[0] != "café" || words[1] != "résumé" || words[2] != "naïve" {
+		t.Errorf("got %v, want [café résumé naïve]", words)
+	}
+}
+
+func BenchmarkSplitWords(b *testing.B) {
+	title := "This Is a Very Long Title That Should Wrap Across Multiple Lines on the Cover Image for Testing Performance"
+	for b.Loop() {
+		splitWords(title)
+	}
+}
+
 func TestLoadFace(t *testing.T) {
 	face, err := loadFace(gobold.TTF, 48)
 	if err != nil {
