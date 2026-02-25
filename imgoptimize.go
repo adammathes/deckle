@@ -292,6 +292,7 @@ func fetchAndEmbed(html []byte, concurrency int) []byte {
 
 	if fetched > 0 {
 		fmt.Fprintf(logOut, "Fetched and embedded %d external images\n", fetched)
+		pprintf("  🔗 %d external images fetched\n", fetched)
 	}
 	return out.Bytes()
 }
@@ -486,6 +487,8 @@ func processArticleImages(html []byte, opts optimizeOpts, concurrency int) []byt
 
 	if st.count > 0 {
 		fmt.Fprintf(logOut, "Optimized %d images: %s → %s\n",
+			st.count, humanSize(st.originalTotal), humanSize(st.optimizedTotal))
+		pprintf("  🖼️  %d images optimized (%s → %s)\n",
 			st.count, humanSize(st.originalTotal), humanSize(st.optimizedTotal))
 	} else {
 		fmt.Fprintln(logOut, "No optimizable images found.")
