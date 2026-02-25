@@ -93,6 +93,28 @@ output against the W3C spec. Do not introduce EPUB 3 validation errors.
 
 ---
 
+## Offline / Limited-Network Environments
+
+In environments without direct DNS access (e.g. Claude Code web sessions),
+Go module downloads can fail because `storage.googleapis.com` is unreachable
+through the default DNS resolver.
+
+A **SessionStart hook** (`.claude/settings.json`) automatically runs
+`scripts/session-setup.sh` to detect the available HTTP proxy and download
+any missing modules before you start working. If it does not fire
+automatically, run it manually:
+
+```bash
+bash scripts/session-setup.sh
+```
+
+The root cause: the environment provides a proxy via `GLOBAL_AGENT_HTTPS_PROXY`
+but the default `no_proxy` setting excludes `*.googleapis.com`, causing Go
+to attempt direct DNS resolution (which fails). The setup script overrides
+`NO_PROXY` to route Go module traffic through the proxy.
+
+---
+
 ## Code Style Reminders
 
 - This is a **Go** project. Follow standard Go style (`gofmt`, `go vet`).
