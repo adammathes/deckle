@@ -108,7 +108,44 @@ EPUB assembly (`epub.go`) is separate from sanitization.
 
 ## PROPOSED
 
-*(Potential work identified during AI-driven stress testing. Not yet approved.)*
+*(Potential work identified during code review and stress testing. Not yet approved.)*
+
+### Connection leak and no connection reuse in browserTransport
+
+`browserTransport.RoundTrip` (`fetch.go:151`) creates a new TLS connection
+via `dialUTLS` for every single request. For HTTP/1.1 responses, it wraps
+the connection in a throwaway `http.Transport` (line 177) that is never
+reused. The `conns map[string]net.Conn` field on the struct (line 124)
+was intended for connection caching but is never written to — it is dead
+code.
+
+Impact: every article fetch and every external image fetch from the same
+host performs a full TCP + TLS handshake. For a 20-article epub from the
+same domain, this means 20+ redundant TLS handshakes. For HTTP/2
+connections the `h2conn` is similarly never cached.
+
+**Fix**: Implement connection pooling keyed by host, or delegate to the
+standard `http.Transport` pool after the initial uTLS handshake. Also
+remove the unused `conns` field.
+
+**Risk**: Medium. Requires careful handling of connection lifecycle and
+concurrent access. The current code is correct but wasteful.
+
+---
+
+### Deduplicate fetchOneImage / fetchImage
+
+`fetchOneImage` (`imgoptimize.go:191`) and `fetchImage` (`imgoptimize.go:328`)
+perform the same HTTP fetch + MIME detection logic with different return
+types. The MIME parsing code (Content-Type header fallback to
+`http.DetectContentType`) is duplicated across both functions.
+
+**Fix**: Extract a shared `fetchImageData(url) ([]byte, string, error)`
+helper and have both callers wrap it.
+
+**Risk**: None. Pure refactor.
+
+---
 
 ### Remove cleanForEpub no-op
 
@@ -117,4 +154,80 @@ compatibility. It could be removed entirely and its call site in
 `processArticleImages` deleted. This is trivial cleanup.
 
 **Risk**: None. Removing dead code.
+
+---
+
+### Remove dead `conns` field from browserTransport
+
+`browserTransport` (`fetch.go:117`) declares a `conns map[string]net.Conn`
+field that is never read or written. It should be removed to avoid
+confusion. (Can be done as part of the connection reuse work above, or
+independently.)
+
+**Risk**: None. Removing dead code.
+
+---
+
+### Handle stdout write errors in writeOutput
+
+`writeOutput` (`main.go:169`) calls `os.Stdout.WriteString(content)` without
+checking the returned error. If stdout is a broken pipe (e.g., piped to
+`head`), the error is silently ignored and `run()` returns nil. The caller
+then exits 0 instead of signaling the failure.
+
+**Fix**: Check the error from `WriteString` and return it.
+
+**Risk**: None. Trivial fix.
+
+---
+
+### Reduce global mutable state
+
+Several package-level variables are mutated at runtime:
+- `maxResponseBytes` (`fetch.go:23`) — set from CLI flag
+- `fetchProxyURL` (`fetch.go:28`) — set from CLI flag
+- `fetchImageClient` (`fetch.go:245`) — set in `init()`, overridden in tests
+- `logOut` (`main.go:29`) — set from `--silent` flag
+
+Tests must save/restore these globals manually, which is fragile and
+prevents `t.Parallel()`. Threading these through `cliConfig` or a context
+object would improve testability and eliminate data race risk.
+
+**Fix**: Pass configuration through function parameters or a config struct
+instead of globals. The `cliConfig` struct already exists and could be
+extended.
+
+**Risk**: Medium. Touches many call sites. Can be done incrementally
+(one global at a time).
+
+---
+
+### Migrate regex-based image processing to DOM
+
+`imgoptimize.go` uses ~10 compiled regexes to manipulate HTML for image
+optimization (lazy-load promotion, external fetch, `<picture>` collapse,
+data URI replacement). While the DOM-based `sanitizeForXHTML` runs
+afterward and catches most edge cases, the regex approach is inherently
+fragile with real-world HTML (attributes containing `>`, unquoted
+attributes, multi-line tags, etc.).
+
+**Fix**: Move image processing to operate on a parsed DOM tree (like
+`sanitize.go` already does), then serialize back to HTML. This would
+eliminate an entire class of parsing edge cases.
+
+**Risk**: High. Large refactor touching the core pipeline. Would need
+thorough regression testing against the stress-test corpus. The current
+approach works in practice due to the sanitizer safety net.
+
+---
+
+### splitWords string concatenation performance
+
+`splitWords` (`cover.go:336`) builds words via `word += string(r)`, which
+allocates a new string for every rune. For long titles this creates
+unnecessary GC pressure.
+
+**Fix**: Use `strings.Builder` for word accumulation.
+
+**Risk**: None. Trivial optimization.
 
