@@ -491,16 +491,5 @@ func processArticleImages(html []byte, opts optimizeOpts, concurrency int) []byt
 		fmt.Fprintln(logOut, "No optimizable images found.")
 	}
 
-	// Cleanup for epub validity
-	html = cleanForEpub(html)
-
-	return html
-}
-
-// cleanForEpub is a no-op retained for pipeline compatibility.
-// All HTML cleanup concerns (AVIF images, external srcset, data-* attributes,
-// inline SVG) are now handled authoritatively by sanitizeForXHTML during
-// EPUB generation. See sanitize.go.
-func cleanForEpub(html []byte) []byte {
 	return html
 }

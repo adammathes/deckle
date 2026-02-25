@@ -572,18 +572,6 @@ func TestFetchImage_ContentTypeWithCharset(t *testing.T) {
 	}
 }
 
-func TestCleanForEpub_IsPassthrough(t *testing.T) {
-	// cleanForEpub is now a no-op — all HTML cleanup concerns are handled
-	// authoritatively by sanitizeForXHTML during EPUB generation.
-	// See TestSanitizeForXHTML_StripAVIFImages, TestSanitizeForXHTML_StripInlineSVG,
-	// and TestSanitizeForXHTML_FiltersAttrs in sanitize_test.go.
-	input := []byte(`<div data-id="123"><img src="data:image/avif;base64,abc"/><svg><circle/></svg><p>content</p></div>`)
-	result := cleanForEpub(input)
-	if string(result) != string(input) {
-		t.Error("cleanForEpub should pass through input unchanged")
-	}
-}
-
 func TestPromoteLazySrc_BasicDataSrc(t *testing.T) {
 	html := []byte(`<img class="lazy" data-src="https://example.com/img.jpg" alt="test">`)
 	result := promoteLazySrc(html)
