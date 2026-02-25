@@ -335,19 +335,19 @@ func wrapText(text string, face font.Face, maxWidth int) []string {
 // splitWords splits a string on whitespace, returning non-empty tokens.
 func splitWords(s string) []string {
 	var words []string
-	word := ""
+	var word strings.Builder
 	for _, r := range s {
 		if r == ' ' || r == '\t' || r == '\n' {
-			if word != "" {
-				words = append(words, word)
-				word = ""
+			if word.Len() > 0 {
+				words = append(words, word.String())
+				word.Reset()
 			}
 		} else {
-			word += string(r)
+			word.WriteRune(r)
 		}
 	}
-	if word != "" {
-		words = append(words, word)
+	if word.Len() > 0 {
+		words = append(words, word.String())
 	}
 	return words
 }
