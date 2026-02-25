@@ -6,7 +6,7 @@ Deckle generates valid EPUB 3 output. A stress test with 87 Hacker News
 article pages (February 2025) found 552 epubcheck errors + 1 fatal, all of
 which have been fixed. The EPUB now validates with 0 errors, 0 warnings.
 
-148 tests pass (including fuzz seed corpus), with 85.5% statement coverage.
+160 tests pass (including fuzz seed corpus), with 85.5% statement coverage.
 
 ### Architecture overview
 
@@ -39,7 +39,8 @@ EPUB assembly (`epub.go`) is separate from sanitization.
 | `imgoptimize.go` | ~530 | Image optimization + lazy-load promotion |
 | `imgoptimize_test.go` | ~830 | Image optimization tests |
 | `cover.go` | 370 | Cover image generation |
-| `main.go` | 287 | CLI + pipeline orchestration |
+| `main.go` | ~310 | CLI + pipeline orchestration |
+| `progress.go` | ~40 | Progress indicators for stdout |
 | `fetch.go` | 233 | HTTP fetching with TLS fingerprinting |
 | `headings.go` | 197 | Title extraction, heading normalization |
 | `ssrf.go` | 77 | SSRF protection |
@@ -124,13 +125,20 @@ EPUB assembly (`epub.go`) is separate from sanitization.
   for long titles. Covered by `TestSplitWords_Content`,
   `TestSplitWords_Unicode`, and `BenchmarkSplitWords`.
 
+- **Add progress indicators on stdout when -o is set**: Added a new
+  `progress.go` module with `progressOut` writer and mutex-protected
+  `pprintf()`. When `-o` is specified (stdout not used for content) and
+  `--silent` is not active, progress is shown on stdout with emoji:
+  📥 article fetch start/count, ✅/❌ per-article status with shortened URL,
+  🔗 external image fetch count, 🖼️ image optimization summary, 📦 epub
+  build status, ✅ final output confirmation. Covers single-URL HTML,
+  single/multi-URL markdown, and multi-article epub modes. `shortURL()`
+  helper truncates URLs to 60 chars for readability. Covered by
+  `TestProgress_*` (12 tests) and `TestShortURL*`.
+
 ## APPROVED
 
-Add progress indicators when outputting to a file via -o and it's safe to print to STDOUT.
-
-Show the multiple files downloading in parallel, then the image downloads/optimizers. Try out one line per document to start.
-
-Use emoji liberally to make it look nice. Add another module if necessary, but keep things simple and maybe you don't need to add one.
+*(No items currently approved.)*
 
 ## PROPOSED
 

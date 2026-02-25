@@ -124,6 +124,8 @@ func fetchMultipleArticles(urls []string, cfg cliConfig) []epubArticle {
 	var wg sync.WaitGroup
 	sem := make(chan struct{}, cfg.concurrency)
 
+	pprintf("📥 Fetching %d articles...\n", len(urls))
+
 	for i, rawURL := range urls {
 		wg.Add(1)
 		go func(i int, rawURL string) {
@@ -135,9 +137,11 @@ func fetchMultipleArticles(urls []string, cfg cliConfig) []epubArticle {
 			h, t, src, err := processURL(rawURL, cfg.opts, cfg.timeout, cfg.userAgent, "", cfg.concurrency)
 			if err != nil {
 				fmt.Fprintf(logOut, "  Error: %v (skipping)\n", err)
+				pprintf("  ❌ [%d/%d] %s — %v\n", i+1, len(urls), shortURL(rawURL), err)
 				return
 			}
 			results[i] = result{html: h, title: t, src: src, ok: true}
+			pprintf("  ✅ [%d/%d] %s\n", i+1, len(urls), shortURL(rawURL))
 		}(i, rawURL)
 	}
 	wg.Wait()
@@ -187,6 +191,9 @@ type cliConfig struct {
 }
 
 // run executes the main application logic, returning any error.
+// Progress output goes to the progressOut writer, which should be set
+// by the caller before invoking run (main() sets it to os.Stdout when
+// -o is specified and --silent is not active).
 func run(cfg cliConfig) error {
 	if cfg.markdownMode && cfg.epubMode {
 		return fmt.Errorf("-markdown and -epub are mutually exclusive")
@@ -235,10 +242,12 @@ func run(cfg cliConfig) error {
 			}
 		}
 
+		pprintf("📦 Building epub from %d articles...\n", len(articles))
 		fmt.Fprintf(logOut, "Building epub from %d articles...\n", len(articles))
 		if err := buildEpub(articles, bookTitle, cfg.output, cfg.coverStyle); err != nil {
 			return fmt.Errorf("building epub: %w", err)
 		}
+		pprintf("✅ %s (%d articles)\n", cfg.output, len(articles))
 		fmt.Fprintf(logOut, "✓ %s (%d articles)\n", cfg.output, len(articles))
 		return nil
 	}
@@ -262,15 +271,24 @@ func run(cfg cliConfig) error {
 		mdOpts.skipImageFetch = true
 
 		if len(urls) == 1 {
+			pprintf("📥 Fetching article...\n")
 			final, _, _, err := processURL(urls[0], mdOpts, cfg.timeout, cfg.userAgent, cfg.titleOverride, cfg.concurrency)
 			if err != nil {
+				pprintf("  ❌ %s — %v\n", shortURL(urls[0]), err)
 				return err
 			}
+			pprintf("  ✅ %s\n", shortURL(urls[0]))
 			md, err := convertArticleToMarkdown(final)
 			if err != nil {
 				return err
 			}
-			return writeOutput(cfg.output, md+"\n")
+			if err := writeOutput(cfg.output, md+"\n"); err != nil {
+				return err
+			}
+			if cfg.output != "" {
+				pprintf("✅ Wrote %s\n", cfg.output)
+			}
+			return nil
 		}
 
 		// Multiple URLs: fetch in parallel, concatenate with separators.
@@ -284,7 +302,13 @@ func run(cfg cliConfig) error {
 		if err != nil {
 			return err
 		}
-		return writeOutput(cfg.output, md+"\n")
+		if err := writeOutput(cfg.output, md+"\n"); err != nil {
+			return err
+		}
+		if cfg.output != "" {
+			pprintf("✅ Wrote %s (%d articles)\n", cfg.output, len(articles))
+		}
+		return nil
 	}
 
 	// Single URL HTML mode
@@ -292,11 +316,20 @@ func run(cfg cliConfig) error {
 		return fmt.Errorf("single URL mode requires exactly one URL argument")
 	}
 
+	pprintf("📥 Fetching article...\n")
 	final, _, _, err := processURL(cfg.args[0], cfg.opts, cfg.timeout, cfg.userAgent, cfg.titleOverride, cfg.concurrency)
 	if err != nil {
+		pprintf("  ❌ %s — %v\n", shortURL(cfg.args[0]), err)
 		return err
 	}
-	return writeOutput(cfg.output, final)
+	pprintf("  ✅ %s\n", shortURL(cfg.args[0]))
+	if err := writeOutput(cfg.output, final); err != nil {
+		return err
+	}
+	if cfg.output != "" {
+		pprintf("✅ Wrote %s\n", cfg.output)
+	}
+	return nil
 }
 
 func main() {
@@ -325,6 +358,11 @@ func main() {
 
 	if *silent {
 		logOut = io.Discard
+	}
+
+	// Enable progress on stdout when output goes to a file and we're not silent.
+	if *output != "" && logOut != io.Discard {
+		progressOut = os.Stdout
 	}
 
 	maxResponseBytes = *maxRespSize
