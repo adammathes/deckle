@@ -191,19 +191,15 @@ type cliConfig struct {
 }
 
 // run executes the main application logic, returning any error.
+// Progress output goes to the progressOut writer, which should be set
+// by the caller before invoking run (main() sets it to os.Stdout when
+// -o is specified and --silent is not active).
 func run(cfg cliConfig) error {
 	if cfg.markdownMode && cfg.epubMode {
 		return fmt.Errorf("-markdown and -epub are mutually exclusive")
 	}
 	if cfg.concurrency < 1 {
 		cfg.concurrency = 5
-	}
-
-	// Enable progress on stdout when output goes to a file and we're not silent.
-	if cfg.output != "" && logOut != io.Discard {
-		progressOut = os.Stdout
-	} else {
-		progressOut = io.Discard
 	}
 
 	if cfg.epubMode {
@@ -362,6 +358,11 @@ func main() {
 
 	if *silent {
 		logOut = io.Discard
+	}
+
+	// Enable progress on stdout when output goes to a file and we're not silent.
+	if *output != "" && logOut != io.Discard {
+		progressOut = os.Stdout
 	}
 
 	maxResponseBytes = *maxRespSize
