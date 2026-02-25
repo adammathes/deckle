@@ -125,7 +125,12 @@ EPUB assembly (`epub.go`) is separate from sanitization.
   `TestSplitWords_Unicode`, and `BenchmarkSplitWords`.
 
 ## APPROVED
-*(No items currently approved.)*
+
+Add progress indicators when outputting to a file via -o and it's safe to print to STDOUT.
+
+Show the multiple files downloading in parallel, then the image downloads/optimizers. Try out one line per document to start.
+
+Use emoji liberally to make it look nice. Add another module if necessary, but keep things simple and maybe you don't need to add one.
 
 ## PROPOSED
 
