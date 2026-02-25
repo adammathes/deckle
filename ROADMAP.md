@@ -103,36 +103,6 @@ EPUB assembly (`epub.go`) is separate from sanitization.
 ## APPROVED
 *(Large work items approved by humans.)*
 
-
----
-
-## PROPOSED
-
-*(Potential work identified during code review and stress testing. Not yet approved.)*
-
-### Connection leak and no connection reuse in browserTransport
-
-`browserTransport.RoundTrip` (`fetch.go:151`) creates a new TLS connection
-via `dialUTLS` for every single request. For HTTP/1.1 responses, it wraps
-the connection in a throwaway `http.Transport` (line 177) that is never
-reused. The `conns map[string]net.Conn` field on the struct (line 124)
-was intended for connection caching but is never written to — it is dead
-code.
-
-Impact: every article fetch and every external image fetch from the same
-host performs a full TCP + TLS handshake. For a 20-article epub from the
-same domain, this means 20+ redundant TLS handshakes. For HTTP/2
-connections the `h2conn` is similarly never cached.
-
-**Fix**: Implement connection pooling keyed by host, or delegate to the
-standard `http.Transport` pool after the initial uTLS handshake. Also
-remove the unused `conns` field.
-
-**Risk**: Medium. Requires careful handling of connection lifecycle and
-concurrent access. The current code is correct but wasteful.
-
----
-
 ### Deduplicate fetchOneImage / fetchImage
 
 `fetchOneImage` (`imgoptimize.go:191`) and `fetchImage` (`imgoptimize.go:328`)
@@ -181,6 +151,45 @@ then exits 0 instead of signaling the failure.
 
 ---
 
+### splitWords string concatenation performance
+
+`splitWords` (`cover.go:336`) builds words via `word += string(r)`, which
+allocates a new string for every rune. For long titles this creates
+unnecessary GC pressure.
+
+**Fix**: Use `strings.Builder` for word accumulation.
+
+**Risk**: None. Trivial optimization.
+
+---
+
+## PROPOSED
+
+*(Potential work identified during code review and stress testing. Not yet approved.)*
+
+### Connection leak and no connection reuse in browserTransport
+
+`browserTransport.RoundTrip` (`fetch.go:151`) creates a new TLS connection
+via `dialUTLS` for every single request. For HTTP/1.1 responses, it wraps
+the connection in a throwaway `http.Transport` (line 177) that is never
+reused. The `conns map[string]net.Conn` field on the struct (line 124)
+was intended for connection caching but is never written to — it is dead
+code.
+
+Impact: every article fetch and every external image fetch from the same
+host performs a full TCP + TLS handshake. For a 20-article epub from the
+same domain, this means 20+ redundant TLS handshakes. For HTTP/2
+connections the `h2conn` is similarly never cached.
+
+**Fix**: Implement connection pooling keyed by host, or delegate to the
+standard `http.Transport` pool after the initial uTLS handshake. Also
+remove the unused `conns` field.
+
+**Risk**: Medium. Requires careful handling of connection lifecycle and
+concurrent access. The current code is correct but wasteful.
+
+---
+
 ### Reduce global mutable state
 
 Several package-level variables are mutated at runtime:
@@ -220,14 +229,3 @@ thorough regression testing against the stress-test corpus. The current
 approach works in practice due to the sanitizer safety net.
 
 ---
-
-### splitWords string concatenation performance
-
-`splitWords` (`cover.go:336`) builds words via `word += string(r)`, which
-allocates a new string for every rune. For long titles this creates
-unnecessary GC pressure.
-
-**Fix**: Use `strings.Builder` for word accumulation.
-
-**Risk**: None. Trivial optimization.
-
