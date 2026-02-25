@@ -554,6 +554,55 @@ func TestRun_SingleMode_TooManyArgs(t *testing.T) {
 	}
 }
 
+func TestWriteOutput_File(t *testing.T) {
+	outFile := filepath.Join(t.TempDir(), "out.txt")
+	err := writeOutput(outFile, "hello world")
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(outFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != "hello world" {
+		t.Errorf("got %q, want %q", string(data), "hello world")
+	}
+}
+
+func TestWriteOutput_FileError(t *testing.T) {
+	// Writing to a nonexistent directory should fail
+	err := writeOutput("/nonexistent/dir/file.txt", "hello")
+	if err == nil {
+		t.Error("expected error for nonexistent directory")
+	}
+}
+
+func TestWriteOutput_Stdout(t *testing.T) {
+	// writeOutput with empty path writes to stdout; just ensure no error
+	// when stdout is valid (os.Pipe is a valid fd).
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+
+	savedStdout := os.Stdout
+	os.Stdout = w
+	defer func() { os.Stdout = savedStdout }()
+
+	err = writeOutput("", "test output")
+	w.Close()
+	if err != nil {
+		t.Fatalf("writeOutput to stdout pipe: %v", err)
+	}
+
+	buf := make([]byte, 256)
+	n, _ := r.Read(buf)
+	if string(buf[:n]) != "test output" {
+		t.Errorf("got %q, want %q", string(buf[:n]), "test output")
+	}
+}
+
 func TestMain(m *testing.M) {
 	// Enable local fetching for all tests by default, so existing tests using httptest pass.
 	// Security tests (e.g. TestSSRFProtection) should explicitly unset this variable.

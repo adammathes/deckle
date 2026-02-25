@@ -186,42 +186,49 @@ func promoteLazySrc(html []byte) []byte {
 	return html
 }
 
-// fetchOneImage downloads a single external image URL and returns its data URI
-// components, or empty strings on failure.
-func fetchOneImage(imgURL string) (mime, encoded string) {
-	// Unescape HTML entities in URL (e.g. &amp; -> &)
+// fetchImageData downloads an image URL and returns its raw bytes and MIME type.
+// It unescapes HTML entities in the URL, reads up to maxResponseBytes, and
+// detects the MIME type from the Content-Type header (falling back to sniffing).
+func fetchImageData(imgURL string) ([]byte, string, error) {
 	imgURL = html.UnescapeString(imgURL)
 
 	resp, err := getImageClient().Get(imgURL)
 	if err != nil {
-		fmt.Fprintf(logOut, "Warning: could not fetch %s: %v\n", imgURL, err)
-		return "", ""
+		return nil, "", err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != 200 {
-		fmt.Fprintf(logOut, "Warning: HTTP %d for %s\n", resp.StatusCode, imgURL)
-		return "", ""
+		return nil, "", fmt.Errorf("HTTP %d", resp.StatusCode)
 	}
 
 	data, err := readLimited(resp.Body, maxResponseBytes)
 	if err != nil {
-		fmt.Fprintf(logOut, "Warning: could not read %s: %v\n", imgURL, err)
-		return "", ""
+		return nil, "", err
 	}
 
-	// Detect MIME from Content-Type header or sniff
-	m := resp.Header.Get("Content-Type")
-	if i := strings.Index(m, ";"); i >= 0 {
-		m = m[:i]
+	mime := resp.Header.Get("Content-Type")
+	if i := strings.Index(mime, ";"); i >= 0 {
+		mime = mime[:i]
 	}
-	m = strings.TrimSpace(m)
-	if m == "" || m == "application/octet-stream" {
-		m = http.DetectContentType(data)
-		if i := strings.Index(m, ";"); i >= 0 {
-			m = m[:i]
+	mime = strings.TrimSpace(mime)
+	if mime == "" || mime == "application/octet-stream" {
+		mime = http.DetectContentType(data)
+		if i := strings.Index(mime, ";"); i >= 0 {
+			mime = mime[:i]
 		}
 	}
 
+	return data, mime, nil
+}
+
+// fetchOneImage downloads a single external image URL and returns its data URI
+// components, or empty strings on failure.
+func fetchOneImage(imgURL string) (mime, encoded string) {
+	data, m, err := fetchImageData(imgURL)
+	if err != nil {
+		fmt.Fprintf(logOut, "Warning: could not fetch %s: %v\n", imgURL, err)
+		return "", ""
+	}
 	return m, base64.StdEncoding.EncodeToString(data)
 }
 
@@ -326,35 +333,7 @@ func tryOptimizeDataURI(mime, b64data string, opts optimizeOpts, st *stats) stri
 
 // fetchImage downloads an image URL and returns its bytes and MIME type.
 func fetchImage(imgURL string) ([]byte, string, error) {
-	// Unescape HTML entities in URL (e.g. &amp; -> &)
-	imgURL = html.UnescapeString(imgURL)
-
-	resp, err := getImageClient().Get(imgURL)
-	if err != nil {
-		return nil, "", err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != 200 {
-		return nil, "", fmt.Errorf("HTTP %d", resp.StatusCode)
-	}
-
-	data, err := readLimited(resp.Body, maxResponseBytes)
-	if err != nil {
-		return nil, "", err
-	}
-
-	mime := resp.Header.Get("Content-Type")
-	if i := strings.Index(mime, ";"); i >= 0 {
-		mime = mime[:i]
-	}
-	mime = strings.TrimSpace(mime)
-	if mime == "" || mime == "application/octet-stream" {
-		mime = http.DetectContentType(data)
-		if i := strings.Index(mime, ";"); i >= 0 {
-			mime = mime[:i]
-		}
-	}
-	return data, mime, nil
+	return fetchImageData(imgURL)
 }
 
 // pickBestSrcsetURL extracts URLs from a srcset attribute value and picks
@@ -512,16 +491,5 @@ func processArticleImages(html []byte, opts optimizeOpts, concurrency int) []byt
 		fmt.Fprintln(logOut, "No optimizable images found.")
 	}
 
-	// Cleanup for epub validity
-	html = cleanForEpub(html)
-
-	return html
-}
-
-// cleanForEpub is a no-op retained for pipeline compatibility.
-// All HTML cleanup concerns (AVIF images, external srcset, data-* attributes,
-// inline SVG) are now handled authoritatively by sanitizeForXHTML during
-// EPUB generation. See sanitize.go.
-func cleanForEpub(html []byte) []byte {
 	return html
 }

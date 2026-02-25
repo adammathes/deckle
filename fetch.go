@@ -8,7 +8,6 @@ import (
 	"net"
 	"net/http"
 	"net/url"
-	"sync"
 	"time"
 
 	utls "github.com/refraction-networking/utls"
@@ -119,9 +118,6 @@ type browserTransport struct {
 	h1      *http.Transport
 	h2      *http2.Transport
 	timeout time.Duration
-	mu      sync.Mutex
-	// Cache TLS connections per host to allow connection reuse
-	conns map[string]net.Conn
 }
 
 func (bt *browserTransport) dialUTLS(ctx context.Context, network, addr string) (net.Conn, string, error) {

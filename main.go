@@ -166,7 +166,9 @@ func writeOutput(path, content string) error {
 		}
 		return nil
 	}
-	os.Stdout.WriteString(content)
+	if _, err := os.Stdout.WriteString(content); err != nil {
+		return fmt.Errorf("writing to stdout: %w", err)
+	}
 	return nil
 }
 

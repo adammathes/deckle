@@ -6,7 +6,7 @@ Deckle generates valid EPUB 3 output. A stress test with 87 Hacker News
 article pages (February 2025) found 552 epubcheck errors + 1 fatal, all of
 which have been fixed. The EPUB now validates with 0 errors, 0 warnings.
 
-133 tests pass (including fuzz seed corpus), with 85.3% statement coverage.
+148 tests pass (including fuzz seed corpus), with 85.5% statement coverage.
 
 ### Architecture overview
 
@@ -100,68 +100,32 @@ EPUB assembly (`epub.go`) is separate from sanitization.
   proxy is configured. Covered by `TestNewProxyClient_*` and
   `TestFetchHTML_WithProxy`.
 
+- **Deduplicate fetchOneImage / fetchImage**: Extracted a shared
+  `fetchImageData(url) ([]byte, string, error)` helper that handles HTTP
+  fetch + MIME detection. `fetchOneImage` and `fetchImage` are now thin
+  wrappers. Covered by `TestFetchImageData_*` and
+  `TestFetchOneImage_UsesFetchImageData`.
+
+- **Remove cleanForEpub no-op**: Removed the `cleanForEpub` no-op function
+  and its call site in `processArticleImages`. All HTML cleanup is handled
+  authoritatively by `sanitizeForXHTML` during EPUB generation.
+
+- **Remove dead `conns` field from browserTransport**: Removed the unused
+  `conns map[string]net.Conn` field and its `sync.Mutex` from
+  `browserTransport`. The field was never read or written.
+
+- **Handle stdout write errors in writeOutput**: `writeOutput` now checks
+  the error from `os.Stdout.WriteString` and returns it. Previously, a
+  broken pipe (e.g., piped to `head`) was silently ignored. Covered by
+  `TestWriteOutput_*`.
+
+- **splitWords string concatenation performance**: Replaced `word += string(r)`
+  with `strings.Builder` for O(1) amortized appends, reducing GC pressure
+  for long titles. Covered by `TestSplitWords_Content`,
+  `TestSplitWords_Unicode`, and `BenchmarkSplitWords`.
+
 ## APPROVED
-*(Large work items approved by humans.)*
-
-### Deduplicate fetchOneImage / fetchImage
-
-`fetchOneImage` (`imgoptimize.go:191`) and `fetchImage` (`imgoptimize.go:328`)
-perform the same HTTP fetch + MIME detection logic with different return
-types. The MIME parsing code (Content-Type header fallback to
-`http.DetectContentType`) is duplicated across both functions.
-
-**Fix**: Extract a shared `fetchImageData(url) ([]byte, string, error)`
-helper and have both callers wrap it.
-
-**Risk**: None. Pure refactor.
-
----
-
-### Remove cleanForEpub no-op
-
-`cleanForEpub` is currently a no-op passthrough retained for pipeline
-compatibility. It could be removed entirely and its call site in
-`processArticleImages` deleted. This is trivial cleanup.
-
-**Risk**: None. Removing dead code.
-
----
-
-### Remove dead `conns` field from browserTransport
-
-`browserTransport` (`fetch.go:117`) declares a `conns map[string]net.Conn`
-field that is never read or written. It should be removed to avoid
-confusion. (Can be done as part of the connection reuse work above, or
-independently.)
-
-**Risk**: None. Removing dead code.
-
----
-
-### Handle stdout write errors in writeOutput
-
-`writeOutput` (`main.go:169`) calls `os.Stdout.WriteString(content)` without
-checking the returned error. If stdout is a broken pipe (e.g., piped to
-`head`), the error is silently ignored and `run()` returns nil. The caller
-then exits 0 instead of signaling the failure.
-
-**Fix**: Check the error from `WriteString` and return it.
-
-**Risk**: None. Trivial fix.
-
----
-
-### splitWords string concatenation performance
-
-`splitWords` (`cover.go:336`) builds words via `word += string(r)`, which
-allocates a new string for every rune. For long titles this creates
-unnecessary GC pressure.
-
-**Fix**: Use `strings.Builder` for word accumulation.
-
-**Risk**: None. Trivial optimization.
-
----
+*(No items currently approved.)*
 
 ## PROPOSED
 
