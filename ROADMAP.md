@@ -135,7 +135,16 @@ EPUB assembly (`epub.go`) is separate from sanitization.
 
 ## APPROVED
 
-*(No items currently approved.)*
+### CLI coherence
+
+The CLI is kind of complicated right now.
+
+Having positional arguments as URLs or file lists is complicated.
+
+add a "format" option which is one of html, markdown, or epub. Default is markdown. This replaces the multiple mutually exclusive format options (markdown, epub, implicit html)
+add -i string for "input" which takes a filename to distinguish
+probably need to define behavior when you do multiple URLs with HTML format, follow the same basic approach as we did with multiple markdown stuff and concatenate
+enable STDIN input -- enable something like the file.txt lines to be piped in, line by line. So each line is a URL to fetch. Ignore non-URL lines like those prefaced with #
 
 ## PROPOSED
 
