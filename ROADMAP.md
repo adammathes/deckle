@@ -40,7 +40,7 @@ EPUB assembly (`epub.go`) is separate from sanitization.
 | `imgoptimize_test.go` | ~830 | Image optimization tests |
 | `cover.go` | 370 | Cover image generation |
 | `main.go` | ~310 | CLI + pipeline orchestration |
-| `progress.go` | ~40 | Progress indicators for stdout |
+| `progress.go` | ~40 | Verbose output (`-v` flag) |
 | `fetch.go` | 233 | HTTP fetching with TLS fingerprinting |
 | `headings.go` | 197 | Title extraction, heading normalization |
 | `ssrf.go` | 77 | SSRF protection |
@@ -125,16 +125,13 @@ EPUB assembly (`epub.go`) is separate from sanitization.
   for long titles. Covered by `TestSplitWords_Content`,
   `TestSplitWords_Unicode`, and `BenchmarkSplitWords`.
 
-- **Add progress indicators on stdout when -o is set**: Added a new
-  `progress.go` module with `progressOut` writer and mutex-protected
-  `pprintf()`. When `-o` is specified (stdout not used for content) and
-  `--silent` is not active, progress is shown on stdout with emoji:
-  📥 article fetch start/count, ✅/❌ per-article status with shortened URL,
-  🔗 external image fetch count, 🖼️ image optimization summary, 📦 epub
-  build status, ✅ final output confirmation. Covers single-URL HTML,
-  single/multi-URL markdown, and multi-article epub modes. `shortURL()`
-  helper truncates URLs to 60 chars for readability. Covered by
-  `TestProgress_*` (12 tests) and `TestShortURL*`.
+- **Verbose mode (`-v`)**: Silent by default (only errors on stderr).
+  With `-v`, three summary lines on stderr:
+  `Fetching N URLs`, `Fetching, optimizing and embedding X images`,
+  `Building epub at file`. Image count is aggregated across all articles
+  after all fetches complete. `logOut` (detailed per-URL/per-image output)
+  stays suppressed under `-v`; reserved for future `-vv`. Covered by
+  `TestVerbose_*` and `TestShortURL*`.
 
 ## APPROVED
 
@@ -143,6 +140,29 @@ EPUB assembly (`epub.go`) is separate from sanitization.
 ## PROPOSED
 
 *(Potential work identified during code review and stress testing. Not yet approved.)*
+
+### Very verbose mode (`-vv`)
+
+The current `-v` flag shows high-level summary lines (`Downloading N
+articles`, `Fetching N images`, etc.). A `-vv` flag would add detailed
+per-URL and per-image output useful for debugging:
+
+- Per-article: URL, HTTP status, response size, extracted title
+- Per-image: source URL, original size, optimized size, format conversion
+- Timing: elapsed time per fetch, total pipeline duration
+- Warnings: failed fetches, skipped images, decode errors (currently
+  written to `logOut` but suppressed by default)
+
+**Implementation**: Add a second verbosity level. `-v` enables `verboseOut`
+(summary lines). `-vv` also enables `logOut` (detailed per-item output
+that already exists but is currently suppressed by default). No new
+logging calls needed — the existing `fmt.Fprintf(logOut, ...)` calls
+throughout `fetch.go`, `imgoptimize.go`, and `epub.go` already produce
+the detailed output; they just need `logOut` pointed at stderr.
+
+**Risk**: Low. The detailed output already exists; this is just wiring.
+
+---
 
 ### Connection leak and no connection reuse in browserTransport
 

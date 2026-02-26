@@ -24,9 +24,9 @@ import (
 	"time"
 )
 
-// logOut is the writer for informational/progress output.
-// In silent mode it is set to io.Discard so only errors reach the user.
-var logOut io.Writer = os.Stderr
+// logOut is the writer for detailed informational output (warnings, per-URL
+// status). Defaults to io.Discard (silent). Enabled by -v.
+var logOut io.Writer = io.Discard
 
 // processURL fetches a URL and runs the full article pipeline.
 // Returns the final HTML string, article title, source info, and any error.
@@ -124,8 +124,6 @@ func fetchMultipleArticles(urls []string, cfg cliConfig) []epubArticle {
 	var wg sync.WaitGroup
 	sem := make(chan struct{}, cfg.concurrency)
 
-	pprintf("📥 Fetching %d articles...\n", len(urls))
-
 	for i, rawURL := range urls {
 		wg.Add(1)
 		go func(i int, rawURL string) {
@@ -137,11 +135,9 @@ func fetchMultipleArticles(urls []string, cfg cliConfig) []epubArticle {
 			h, t, src, err := processURL(rawURL, cfg.opts, cfg.timeout, cfg.userAgent, "", cfg.concurrency)
 			if err != nil {
 				fmt.Fprintf(logOut, "  Error: %v (skipping)\n", err)
-				pprintf("  ❌ [%d/%d] %s — %v\n", i+1, len(urls), shortURL(rawURL), err)
 				return
 			}
 			results[i] = result{html: h, title: t, src: src, ok: true}
-			pprintf("  ✅ [%d/%d] %s\n", i+1, len(urls), shortURL(rawURL))
 		}(i, rawURL)
 	}
 	wg.Wait()
@@ -191,9 +187,6 @@ type cliConfig struct {
 }
 
 // run executes the main application logic, returning any error.
-// Progress output goes to the progressOut writer, which should be set
-// by the caller before invoking run (main() sets it to os.Stdout when
-// -o is specified and --silent is not active).
 func run(cfg cliConfig) error {
 	if cfg.markdownMode && cfg.epubMode {
 		return fmt.Errorf("-markdown and -epub are mutually exclusive")
@@ -218,9 +211,15 @@ func run(cfg cliConfig) error {
 			return fmt.Errorf("no URLs provided")
 		}
 
+		totalImages.Store(0)
+		vprintf("Fetching %d URLs\n", len(urls))
+
 		articles := fetchMultipleArticles(urls, cfg)
 		if len(articles) == 0 {
 			return fmt.Errorf("no articles converted")
+		}
+		if n := totalImages.Load(); n > 0 {
+			vprintf("Fetching, optimizing and embedding %d images\n", n)
 		}
 
 		// Derive book title: -title flag > .txt filename > first article title > output filename
@@ -242,13 +241,10 @@ func run(cfg cliConfig) error {
 			}
 		}
 
-		pprintf("📦 Building epub from %d articles...\n", len(articles))
-		fmt.Fprintf(logOut, "Building epub from %d articles...\n", len(articles))
+		vprintf("Building epub at %s\n", cfg.output)
 		if err := buildEpub(articles, bookTitle, cfg.output, cfg.coverStyle); err != nil {
 			return fmt.Errorf("building epub: %w", err)
 		}
-		pprintf("✅ %s (%d articles)\n", cfg.output, len(articles))
-		fmt.Fprintf(logOut, "✓ %s (%d articles)\n", cfg.output, len(articles))
 		return nil
 	}
 
@@ -271,29 +267,22 @@ func run(cfg cliConfig) error {
 		mdOpts.skipImageFetch = true
 
 		if len(urls) == 1 {
-			pprintf("📥 Fetching article...\n")
+			vprintf("Fetching 1 URL\n")
 			final, _, _, err := processURL(urls[0], mdOpts, cfg.timeout, cfg.userAgent, cfg.titleOverride, cfg.concurrency)
 			if err != nil {
-				pprintf("  ❌ %s — %v\n", shortURL(urls[0]), err)
 				return err
 			}
-			pprintf("  ✅ %s\n", shortURL(urls[0]))
 			md, err := convertArticleToMarkdown(final)
 			if err != nil {
 				return err
 			}
-			if err := writeOutput(cfg.output, md+"\n"); err != nil {
-				return err
-			}
-			if cfg.output != "" {
-				pprintf("✅ Wrote %s\n", cfg.output)
-			}
-			return nil
+			return writeOutput(cfg.output, md+"\n")
 		}
 
 		// Multiple URLs: fetch in parallel, concatenate with separators.
 		mdCfg := cfg
 		mdCfg.opts = mdOpts
+		vprintf("Fetching %d URLs\n", len(urls))
 		articles := fetchMultipleArticles(urls, mdCfg)
 		if len(articles) == 0 {
 			return fmt.Errorf("no articles converted")
@@ -302,13 +291,7 @@ func run(cfg cliConfig) error {
 		if err != nil {
 			return err
 		}
-		if err := writeOutput(cfg.output, md+"\n"); err != nil {
-			return err
-		}
-		if cfg.output != "" {
-			pprintf("✅ Wrote %s (%d articles)\n", cfg.output, len(articles))
-		}
-		return nil
+		return writeOutput(cfg.output, md+"\n")
 	}
 
 	// Single URL HTML mode
@@ -316,20 +299,16 @@ func run(cfg cliConfig) error {
 		return fmt.Errorf("single URL mode requires exactly one URL argument")
 	}
 
-	pprintf("📥 Fetching article...\n")
+	totalImages.Store(0)
+	vprintf("Fetching 1 URL\n")
 	final, _, _, err := processURL(cfg.args[0], cfg.opts, cfg.timeout, cfg.userAgent, cfg.titleOverride, cfg.concurrency)
 	if err != nil {
-		pprintf("  ❌ %s — %v\n", shortURL(cfg.args[0]), err)
 		return err
 	}
-	pprintf("  ✅ %s\n", shortURL(cfg.args[0]))
-	if err := writeOutput(cfg.output, final); err != nil {
-		return err
+	if n := totalImages.Load(); n > 0 {
+		vprintf("Fetching, optimizing and embedding %d images\n", n)
 	}
-	if cfg.output != "" {
-		pprintf("✅ Wrote %s\n", cfg.output)
-	}
-	return nil
+	return writeOutput(cfg.output, final)
 }
 
 func main() {
@@ -346,7 +325,7 @@ func main() {
 	concurrency := flag.Int("concurrency", 5, "Max concurrent downloads for articles and images")
 	maxRespSize := flag.Int64("max-response-size", 128*1024*1024, "Maximum allowed HTTP response size in bytes (0 for unlimited)")
 	proxy := flag.String("proxy", "", "HTTP proxy URL (falls back to standard TLS, e.g. http://proxy.example.com:8080)")
-	silent := flag.Bool("silent", false, "Suppress all output except errors (for pipeline use)")
+	verbose := flag.Bool("v", false, "Verbose output (show progress on stderr)")
 	flag.Usage = func() {
 		fmt.Fprintf(os.Stderr, "Usage: deckle [options] <URL>\n")
 		fmt.Fprintf(os.Stderr, "       deckle [options] -markdown <URL|file.txt> [...]\n")
@@ -356,13 +335,8 @@ func main() {
 	}
 	flag.Parse()
 
-	if *silent {
-		logOut = io.Discard
-	}
-
-	// Enable progress on stdout when output goes to a file and we're not silent.
-	if *output != "" && logOut != io.Discard {
-		progressOut = os.Stdout
+	if *verbose {
+		verboseOut = os.Stderr
 	}
 
 	maxResponseBytes = *maxRespSize

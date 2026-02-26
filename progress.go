@@ -1,5 +1,5 @@
-// Progress indicators for stdout when output goes to a file.
-// When -o is specified, stdout is free for user-facing progress display.
+// Verbose output for deckle.
+// Default: no output except errors. With -v, simple summary lines on stderr.
 package main
 
 import (
@@ -7,24 +7,20 @@ import (
 	"io"
 	"net/url"
 	"strings"
-	"sync"
+	"sync/atomic"
 )
 
-// progressOut is the writer for progress indicators. Set to os.Stdout when
-// -o is specified (stdout is not used for content output). In all other
-// cases (stdout mode or --silent) it is io.Discard.
-var progressOut io.Writer = io.Discard
+// verboseOut is the writer for verbose summary lines. Set to os.Stderr
+// when -v is specified, otherwise io.Discard (silent by default).
+var verboseOut io.Writer = io.Discard
 
-// progressMu serialises writes to progressOut so concurrent goroutines
-// (e.g. in fetchMultipleArticles) don't interleave output lines.
-var progressMu sync.Mutex
+// totalImages tracks the aggregate image count across all articles,
+// incremented inside processArticleImages and read after all fetches complete.
+var totalImages atomic.Int64
 
-// pprintf writes a formatted progress line to progressOut, holding the
-// mutex to prevent interleaving from concurrent goroutines.
-func pprintf(format string, args ...any) {
-	progressMu.Lock()
-	defer progressMu.Unlock()
-	fmt.Fprintf(progressOut, format, args...)
+// vprintf writes a formatted line to verboseOut when -v is active.
+func vprintf(format string, args ...any) {
+	fmt.Fprintf(verboseOut, format, args...)
 }
 
 // shortURL returns a compact display form of a URL: host + trimmed path,

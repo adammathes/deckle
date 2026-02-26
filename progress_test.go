@@ -14,13 +14,18 @@ import (
 	"time"
 )
 
-// withProgressCapture sets progressOut to a buffer, runs fn, restores
-// progressOut, and returns the captured output.
-func withProgressCapture(fn func()) string {
+// withVerboseCapture enables verbose output to a buffer, runs fn, restores
+// state, and returns the captured output.
+func withVerboseCapture(fn func()) string {
 	var buf bytes.Buffer
-	saved := progressOut
-	progressOut = &buf
-	defer func() { progressOut = saved }()
+	savedVerbose := verboseOut
+	savedLog := logOut
+	verboseOut = &buf
+	logOut = io.Discard
+	defer func() {
+		verboseOut = savedVerbose
+		logOut = savedLog
+	}()
 	fn()
 	return buf.String()
 }
@@ -54,30 +59,33 @@ func TestShortURL_Truncation(t *testing.T) {
 	}
 }
 
-func TestPprintf(t *testing.T) {
-	output := withProgressCapture(func() {
-		pprintf("hello %s %d\n", "world", 42)
-	})
-	if output != "hello world 42\n" {
-		t.Errorf("pprintf output = %q, want %q", output, "hello world 42\n")
+func TestVprintf(t *testing.T) {
+	var buf bytes.Buffer
+	saved := verboseOut
+	verboseOut = &buf
+	defer func() { verboseOut = saved }()
+
+	vprintf("hello %s %d\n", "world", 42)
+	if buf.String() != "hello world 42\n" {
+		t.Errorf("vprintf output = %q, want %q", buf.String(), "hello world 42\n")
 	}
 }
 
-func TestPprintf_NoOutput_WhenDiscard(t *testing.T) {
-	saved := progressOut
-	progressOut = io.Discard
-	defer func() { progressOut = saved }()
+func TestVprintf_NoOutput_WhenDiscard(t *testing.T) {
+	saved := verboseOut
+	verboseOut = io.Discard
+	defer func() { verboseOut = saved }()
 
 	// Just ensure no panic; output goes nowhere.
-	pprintf("this goes nowhere: %d\n", 1)
+	vprintf("this goes nowhere: %d\n", 1)
 }
 
-func TestProgress_SingleURL_WithOutput(t *testing.T) {
+func TestVerbose_SingleURL_WithOutput(t *testing.T) {
 	pageHTML := `<!DOCTYPE html>
-<html><head><title>Single Progress</title></head><body>
+<html><head><title>Single Test</title></head><body>
 <article>
-<h1>Single Progress</h1>
-<p>This is a test article for single URL progress testing. It has enough
+<h1>Single Test</h1>
+<p>This is a test article for single URL verbose testing. It has enough
 content for readability to extract it as the main article. More text here.</p>
 <p>Second paragraph with additional content for readability.</p>
 </article>
@@ -98,57 +106,36 @@ content for readability to extract it as the main article. More text here.</p>
 		args:      []string{srv.URL},
 	}
 
-	output := withProgressCapture(func() {
-		err := run(cfg)
-		if err != nil {
+	output := withVerboseCapture(func() {
+		if err := run(cfg); err != nil {
 			t.Fatal(err)
 		}
 	})
 
-	if !strings.Contains(output, "📥") {
-		t.Errorf("expected 📥 fetch indicator in progress output, got:\n%s", output)
+	if !strings.Contains(output, "Fetching 1 URL") {
+		t.Errorf("expected 'Fetching 1 URL' in verbose output, got:\n%s", output)
 	}
-	if !strings.Contains(output, "✅") {
-		t.Errorf("expected ✅ success indicator in progress output, got:\n%s", output)
-	}
-	if !strings.Contains(output, "Wrote") {
-		t.Errorf("expected 'Wrote' in progress output, got:\n%s", output)
+	// No Title: or per-image lines in -v output
+	if strings.Contains(output, "Title:") {
+		t.Errorf("verbose output should not contain 'Title:', got:\n%s", output)
 	}
 }
 
-func TestProgress_SingleURL_NoOutput_NoProgress(t *testing.T) {
-	// When no -o flag is set, progressOut should remain io.Discard.
-	// pprintf calls should produce no output.
-	saved := progressOut
-	progressOut = io.Discard
-	defer func() { progressOut = saved }()
-
-	var buf bytes.Buffer
-	progressOut = &buf
-
-	// Simulate: no -o flag, single URL mode. We just test pprintf directly
-	// since run() doesn't touch progressOut anymore.
-	pprintf("should appear\n")
-	if buf.String() != "should appear\n" {
-		t.Errorf("unexpected output: %q", buf.String())
-	}
-}
-
-func TestProgress_EpubMode_MultipleArticles(t *testing.T) {
+func TestVerbose_EpubMode_MultipleArticles(t *testing.T) {
 	articlesByPath := map[string]string{
 		"/1": `<!DOCTYPE html><html><head><title>Article One</title></head><body>
 		<article><h1>Article One</h1>
-		<p>First article content for progress test. It has enough content for
+		<p>First article content for test. It has enough content for
 		readability to properly extract the main content region.</p>
 		<p>Second paragraph for content density.</p></article></body></html>`,
 		"/2": `<!DOCTYPE html><html><head><title>Article Two</title></head><body>
 		<article><h1>Article Two</h1>
-		<p>Second article content for progress test. More content needed for
+		<p>Second article content for test. More content needed for
 		readability to extract this as the main article properly.</p>
 		<p>Additional paragraph for the algorithm.</p></article></body></html>`,
 		"/3": `<!DOCTYPE html><html><head><title>Article Three</title></head><body>
 		<article><h1>Article Three</h1>
-		<p>Third article content for progress test. Enough text for readability
+		<p>Third article content for test. Enough text for readability
 		to work with this content block as the main article.</p>
 		<p>More content for density threshold.</p></article></body></html>`,
 	}
@@ -162,7 +149,7 @@ func TestProgress_EpubMode_MultipleArticles(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	outFile := filepath.Join(t.TempDir(), "progress.epub")
+	outFile := filepath.Join(t.TempDir(), "test.epub")
 	cfg := cliConfig{
 		opts:      optimizeOpts{maxWidth: 800, quality: 60},
 		output:    outFile,
@@ -172,82 +159,29 @@ func TestProgress_EpubMode_MultipleArticles(t *testing.T) {
 		args:      []string{srv.URL + "/1", srv.URL + "/2", srv.URL + "/3"},
 	}
 
-	output := withProgressCapture(func() {
-		err := run(cfg)
-		if err != nil {
+	output := withVerboseCapture(func() {
+		if err := run(cfg); err != nil {
 			t.Fatal(err)
 		}
 	})
 
-	// Should show fetch header
-	if !strings.Contains(output, "📥 Fetching 3 articles") {
-		t.Errorf("expected '📥 Fetching 3 articles' in progress, got:\n%s", output)
+	if !strings.Contains(output, "Fetching 3 URLs") {
+		t.Errorf("expected 'Fetching 3 URLs' in verbose, got:\n%s", output)
 	}
-	// Should show per-article checkmarks (at least 3 articles + final)
-	if strings.Count(output, "✅") < 3 {
-		t.Errorf("expected at least 3 ✅ marks, got %d in:\n%s",
-			strings.Count(output, "✅"), output)
-	}
-	// Should show epub building
-	if !strings.Contains(output, "📦") {
-		t.Errorf("expected 📦 epub build indicator, got:\n%s", output)
-	}
-	// Should show final output path
-	if !strings.Contains(output, "progress.epub") {
-		t.Errorf("expected output filename in progress, got:\n%s", output)
+	if !strings.Contains(output, "Building epub at") {
+		t.Errorf("expected 'Building epub at' in verbose, got:\n%s", output)
 	}
 }
 
-func TestProgress_EpubMode_WithFailedArticle(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		if r.URL.Path == "/good" {
-			w.Write([]byte(`<!DOCTYPE html><html><head><title>Good Article</title></head><body>
-			<article><h1>Good Article</h1>
-			<p>This is a good article with enough content for readability. More text.</p>
-			<p>Second paragraph for content density threshold.</p></article></body></html>`))
-		} else {
-			w.WriteHeader(500)
-		}
-	}))
-	defer srv.Close()
-
-	outFile := filepath.Join(t.TempDir(), "partial.epub")
-	cfg := cliConfig{
-		opts:      optimizeOpts{maxWidth: 800, quality: 60},
-		output:    outFile,
-		timeout:   5 * time.Second,
-		userAgent: "test-agent",
-		epubMode:  true,
-		args:      []string{srv.URL + "/good", srv.URL + "/bad"},
-	}
-
-	output := withProgressCapture(func() {
-		err := run(cfg)
-		if err != nil {
-			t.Fatal(err)
-		}
-	})
-
-	// Should show success for good article
-	if !strings.Contains(output, "✅") {
-		t.Errorf("expected ✅ for successful article, got:\n%s", output)
-	}
-	// Should show failure for bad article
-	if !strings.Contains(output, "❌") {
-		t.Errorf("expected ❌ for failed article, got:\n%s", output)
-	}
-}
-
-func TestProgress_WithImages(t *testing.T) {
+func TestVerbose_WithImages(t *testing.T) {
 	imgData := makePNG(1200, 900, color.NRGBA{200, 100, 50, 255})
 	imgURI := "data:image/png;base64," + base64.StdEncoding.EncodeToString(imgData)
 
 	pageHTML := fmt.Sprintf(`<!DOCTYPE html>
-<html><head><title>Image Progress</title></head><body>
+<html><head><title>Image Test</title></head><body>
 <article>
-<h1>Image Progress</h1>
-<p>Article with images for progress testing. It has enough content for
+<h1>Image Test</h1>
+<p>Article with images for testing. It has enough content for
 readability to extract it as the main article. More filler text here.</p>
 <img src="%s" alt="test image">
 <p>Another paragraph for readability content density.</p>
@@ -260,7 +194,7 @@ readability to extract it as the main article. More filler text here.</p>
 	}))
 	defer srv.Close()
 
-	outFile := filepath.Join(t.TempDir(), "img-progress.html")
+	outFile := filepath.Join(t.TempDir(), "img-test.html")
 	cfg := cliConfig{
 		opts:      optimizeOpts{maxWidth: 800, quality: 60},
 		output:    outFile,
@@ -269,23 +203,26 @@ readability to extract it as the main article. More filler text here.</p>
 		args:      []string{srv.URL},
 	}
 
-	output := withProgressCapture(func() {
-		err := run(cfg)
-		if err != nil {
+	output := withVerboseCapture(func() {
+		if err := run(cfg); err != nil {
 			t.Fatal(err)
 		}
 	})
 
-	// Should show image optimization summary
-	if !strings.Contains(output, "🖼️") {
-		t.Errorf("expected 🖼️ image optimization indicator in progress, got:\n%s", output)
+	// Should show aggregate image line
+	if !strings.Contains(output, "embedding") {
+		t.Errorf("expected 'embedding' in verbose output, got:\n%s", output)
 	}
-	if !strings.Contains(output, "optimized") {
-		t.Errorf("expected 'optimized' in image progress, got:\n%s", output)
+	if !strings.Contains(output, "images") {
+		t.Errorf("expected 'images' in verbose output, got:\n%s", output)
+	}
+	// No per-image "Optimized N images:" detail
+	if strings.Contains(output, "Optimized") {
+		t.Errorf("verbose output should not contain per-image 'Optimized' detail, got:\n%s", output)
 	}
 }
 
-func TestProgress_ExternalImages(t *testing.T) {
+func TestVerbose_ExternalImages(t *testing.T) {
 	imgData := makePNG(100, 100, color.NRGBA{255, 0, 0, 255})
 
 	var srv *httptest.Server
@@ -297,10 +234,10 @@ func TestProgress_ExternalImages(t *testing.T) {
 		}
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		w.Write([]byte(fmt.Sprintf(`<!DOCTYPE html>
-<html><head><title>External Images Progress</title></head><body>
+<html><head><title>External Images Test</title></head><body>
 <article>
-<h1>External Images Progress</h1>
-<p>Article with external images for progress testing. Enough content for
+<h1>External Images Test</h1>
+<p>Article with external images for testing. Enough content for
 readability to identify this as the main content region of the page.</p>
 <img src="%s/img/1.png" alt="ext1">
 <img src="%s/img/2.png" alt="ext2">
@@ -314,7 +251,7 @@ readability to identify this as the main content region of the page.</p>
 	fetchImageClient = srv.Client()
 	defer func() { fetchImageClient = saved }()
 
-	outFile := filepath.Join(t.TempDir(), "ext-progress.html")
+	outFile := filepath.Join(t.TempDir(), "ext-test.html")
 	cfg := cliConfig{
 		opts:      optimizeOpts{maxWidth: 800, quality: 60},
 		output:    outFile,
@@ -323,28 +260,24 @@ readability to identify this as the main content region of the page.</p>
 		args:      []string{srv.URL},
 	}
 
-	output := withProgressCapture(func() {
-		err := run(cfg)
-		if err != nil {
+	output := withVerboseCapture(func() {
+		if err := run(cfg); err != nil {
 			t.Fatal(err)
 		}
 	})
 
-	// Should show external image fetch indicator
-	if !strings.Contains(output, "🔗") {
-		t.Errorf("expected 🔗 external image fetch indicator, got:\n%s", output)
-	}
-	if !strings.Contains(output, "external images fetched") {
-		t.Errorf("expected 'external images fetched' in progress, got:\n%s", output)
+	// Should show aggregate image count
+	if !strings.Contains(output, "embedding") {
+		t.Errorf("expected 'embedding' in verbose output, got:\n%s", output)
 	}
 }
 
-func TestProgress_MarkdownMode_SingleURL(t *testing.T) {
+func TestVerbose_MarkdownMode_SingleURL(t *testing.T) {
 	pageHTML := `<!DOCTYPE html>
-<html><head><title>MD Progress</title></head><body>
+<html><head><title>MD Test</title></head><body>
 <article>
-<h1>MD Progress</h1>
-<p>This is a test article for markdown progress testing. It has enough content
+<h1>MD Test</h1>
+<p>This is a test article for markdown verbose testing. It has enough content
 for readability to extract it as the main article. More text here to meet
 the content threshold for the readability algorithm.</p>
 <p>Second paragraph with additional content for readability density.</p>
@@ -367,30 +300,27 @@ the content threshold for the readability algorithm.</p>
 		args:         []string{srv.URL},
 	}
 
-	output := withProgressCapture(func() {
-		err := run(cfg)
-		if err != nil {
+	output := withVerboseCapture(func() {
+		if err := run(cfg); err != nil {
 			t.Fatal(err)
 		}
 	})
 
-	if !strings.Contains(output, "📥") {
-		t.Errorf("expected 📥 in markdown single-URL progress, got:\n%s", output)
+	if !strings.Contains(output, "Fetching 1 URL") {
+		t.Errorf("expected 'Fetching 1 URL' in verbose, got:\n%s", output)
 	}
-	if !strings.Contains(output, "✅") {
-		t.Errorf("expected ✅ in markdown single-URL progress, got:\n%s", output)
-	}
-	if !strings.Contains(output, "Wrote") {
-		t.Errorf("expected 'Wrote' in markdown single-URL progress, got:\n%s", output)
+	// Markdown mode skips images, so no image line
+	if strings.Contains(output, "embedding") {
+		t.Errorf("markdown mode should not mention image embedding, got:\n%s", output)
 	}
 }
 
-func TestProgress_MarkdownMode_MultipleURLs(t *testing.T) {
+func TestVerbose_MarkdownMode_MultipleURLs(t *testing.T) {
 	pageHTML := `<!DOCTYPE html>
-<html><head><title>Multi MD Progress</title></head><body>
+<html><head><title>Multi MD Test</title></head><body>
 <article>
-<h1>Multi MD Progress</h1>
-<p>Test article for multi-URL markdown progress testing. Enough content for
+<h1>Multi MD Test</h1>
+<p>Test article for multi-URL markdown verbose testing. Enough content for
 readability to extract as the main article content region.</p>
 <p>Second paragraph for content density threshold.</p>
 </article>
@@ -412,43 +342,63 @@ readability to extract as the main article content region.</p>
 		args:         []string{srv.URL + "/a", srv.URL + "/b"},
 	}
 
-	output := withProgressCapture(func() {
-		err := run(cfg)
-		if err != nil {
+	output := withVerboseCapture(func() {
+		if err := run(cfg); err != nil {
 			t.Fatal(err)
 		}
 	})
 
-	if !strings.Contains(output, "📥 Fetching 2 articles") {
-		t.Errorf("expected '📥 Fetching 2 articles' in progress, got:\n%s", output)
-	}
-	if !strings.Contains(output, "Wrote") {
-		t.Errorf("expected 'Wrote' in markdown multi-URL progress, got:\n%s", output)
+	if !strings.Contains(output, "Fetching 2 URLs") {
+		t.Errorf("expected 'Fetching 2 URLs' in verbose, got:\n%s", output)
 	}
 }
 
-func TestProgress_ConcurrentSafety(t *testing.T) {
-	// Verify pprintf doesn't interleave output from concurrent goroutines.
-	output := withProgressCapture(func() {
-		done := make(chan struct{})
-		for i := 0; i < 10; i++ {
-			go func(n int) {
-				defer func() { done <- struct{}{} }()
-				pprintf("line %d\n", n)
-			}(i)
-		}
-		for i := 0; i < 10; i++ {
-			<-done
-		}
-	})
+func TestDefaultSilence_NoOutput(t *testing.T) {
+	pageHTML := `<!DOCTYPE html>
+<html><head><title>Silent Test</title></head><body>
+<article>
+<h1>Silent Test</h1>
+<p>This is a test article. It has enough content for readability to extract
+it as the main article. More text here for the algorithm.</p>
+<p>Second paragraph with additional content.</p>
+</article>
+</body></html>`
 
-	lines := strings.Split(strings.TrimSpace(output), "\n")
-	if len(lines) != 10 {
-		t.Errorf("expected 10 lines, got %d:\n%s", len(lines), output)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.Write([]byte(pageHTML))
+	}))
+	defer srv.Close()
+
+	// Capture both verbose and log to verify silence
+	var buf bytes.Buffer
+	savedVerbose := verboseOut
+	savedLog := logOut
+	verboseOut = &buf
+	logOut = &buf
+	defer func() {
+		verboseOut = savedVerbose
+		logOut = savedLog
+	}()
+
+	// Now set to discard (default behavior)
+	verboseOut = io.Discard
+	logOut = io.Discard
+
+	outFile := filepath.Join(t.TempDir(), "silent.html")
+	cfg := cliConfig{
+		opts:      optimizeOpts{maxWidth: 800, quality: 60},
+		output:    outFile,
+		timeout:   5 * time.Second,
+		userAgent: "test-agent",
+		args:      []string{srv.URL},
 	}
-	for _, line := range lines {
-		if !strings.HasPrefix(line, "line ") {
-			t.Errorf("unexpected line format: %q", line)
-		}
+
+	if err := run(cfg); err != nil {
+		t.Fatal(err)
+	}
+
+	if buf.Len() != 0 {
+		t.Errorf("expected no output in default (silent) mode, got: %q", buf.String())
 	}
 }
