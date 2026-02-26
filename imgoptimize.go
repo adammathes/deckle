@@ -292,7 +292,6 @@ func fetchAndEmbed(html []byte, concurrency int) []byte {
 
 	if fetched > 0 {
 		fmt.Fprintf(logOut, "Fetched and embedded %d external images\n", fetched)
-		pprintf("  🔗 %d external images fetched\n", fetched)
 	}
 	return out.Bytes()
 }
@@ -402,7 +401,8 @@ func processArticleImages(html []byte, opts optimizeOpts, concurrency int) []byt
 		html = fetchAndEmbed(html, concurrency)
 	}
 
-	// Collapse <picture> elements into single <img> tags
+	// Collapse <picture> elements into single <img> tags.
+	// Image counting happens after this step, in the data URI pass.
 	html = pictureRe.ReplaceAllFunc(html, func(match []byte) []byte {
 		alt := ""
 		if m := altRe.FindSubmatch(match); m != nil {
@@ -463,7 +463,9 @@ func processArticleImages(html []byte, opts optimizeOpts, concurrency int) []byt
 	})
 
 	// Optimize standalone <img src="data:..."> (not inside <picture>)
+	progressAddImages(len(dataURIRe.FindAllIndex(html, -1)))
 	html = dataURIRe.ReplaceAllFunc(html, func(match []byte) []byte {
+		defer progressImageDone()
 		parts := dataURIRe.FindSubmatch(match)
 		if parts == nil {
 			return match
@@ -487,8 +489,6 @@ func processArticleImages(html []byte, opts optimizeOpts, concurrency int) []byt
 
 	if st.count > 0 {
 		fmt.Fprintf(logOut, "Optimized %d images: %s → %s\n",
-			st.count, humanSize(st.originalTotal), humanSize(st.optimizedTotal))
-		pprintf("  🖼️  %d images optimized (%s → %s)\n",
 			st.count, humanSize(st.originalTotal), humanSize(st.optimizedTotal))
 	} else {
 		fmt.Fprintln(logOut, "No optimizable images found.")

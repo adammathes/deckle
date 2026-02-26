@@ -124,8 +124,6 @@ func fetchMultipleArticles(urls []string, cfg cliConfig) []epubArticle {
 	var wg sync.WaitGroup
 	sem := make(chan struct{}, cfg.concurrency)
 
-	pprintf("📥 Fetching %d articles...\n", len(urls))
-
 	for i, rawURL := range urls {
 		wg.Add(1)
 		go func(i int, rawURL string) {
@@ -137,11 +135,11 @@ func fetchMultipleArticles(urls []string, cfg cliConfig) []epubArticle {
 			h, t, src, err := processURL(rawURL, cfg.opts, cfg.timeout, cfg.userAgent, "", cfg.concurrency)
 			if err != nil {
 				fmt.Fprintf(logOut, "  Error: %v (skipping)\n", err)
-				pprintf("  ❌ [%d/%d] %s — %v\n", i+1, len(urls), shortURL(rawURL), err)
+				progressArticleFailed()
 				return
 			}
 			results[i] = result{html: h, title: t, src: src, ok: true}
-			pprintf("  ✅ [%d/%d] %s\n", i+1, len(urls), shortURL(rawURL))
+			progressArticleDone()
 		}(i, rawURL)
 	}
 	wg.Wait()
@@ -218,8 +216,11 @@ func run(cfg cliConfig) error {
 			return fmt.Errorf("no URLs provided")
 		}
 
+		startProgress(len(urls))
+
 		articles := fetchMultipleArticles(urls, cfg)
 		if len(articles) == 0 {
+			finishProgress("FAILED -- no articles converted")
 			return fmt.Errorf("no articles converted")
 		}
 
@@ -242,13 +243,18 @@ func run(cfg cliConfig) error {
 			}
 		}
 
-		pprintf("📦 Building epub from %d articles...\n", len(articles))
 		fmt.Fprintf(logOut, "Building epub from %d articles...\n", len(articles))
 		if err := buildEpub(articles, bookTitle, cfg.output, cfg.coverStyle); err != nil {
+			finishProgress("FAILED -- " + err.Error())
 			return fmt.Errorf("building epub: %w", err)
 		}
-		pprintf("✅ %s (%d articles)\n", cfg.output, len(articles))
-		fmt.Fprintf(logOut, "✓ %s (%d articles)\n", cfg.output, len(articles))
+		failed := len(urls) - len(articles)
+		if failed > 0 {
+			finishProgress(fmt.Sprintf("DONE -- wrote %s (%d articles, %d failed)", cfg.output, len(articles), failed))
+		} else {
+			finishProgress(fmt.Sprintf("DONE -- wrote %s (%d articles)", cfg.output, len(articles)))
+		}
+		fmt.Fprintf(logOut, "wrote %s (%d articles)\n", cfg.output, len(articles))
 		return nil
 	}
 
@@ -271,22 +277,25 @@ func run(cfg cliConfig) error {
 		mdOpts.skipImageFetch = true
 
 		if len(urls) == 1 {
-			pprintf("📥 Fetching article...\n")
+			startProgress(1)
 			final, _, _, err := processURL(urls[0], mdOpts, cfg.timeout, cfg.userAgent, cfg.titleOverride, cfg.concurrency)
 			if err != nil {
-				pprintf("  ❌ %s — %v\n", shortURL(urls[0]), err)
+				finishProgress("FAILED -- " + err.Error())
 				return err
 			}
-			pprintf("  ✅ %s\n", shortURL(urls[0]))
 			md, err := convertArticleToMarkdown(final)
 			if err != nil {
+				finishProgress("FAILED -- " + err.Error())
 				return err
 			}
 			if err := writeOutput(cfg.output, md+"\n"); err != nil {
+				finishProgress("FAILED -- " + err.Error())
 				return err
 			}
 			if cfg.output != "" {
-				pprintf("✅ Wrote %s\n", cfg.output)
+				finishProgress("DONE -- wrote " + cfg.output)
+			} else {
+				finishProgress("DONE")
 			}
 			return nil
 		}
@@ -294,19 +303,25 @@ func run(cfg cliConfig) error {
 		// Multiple URLs: fetch in parallel, concatenate with separators.
 		mdCfg := cfg
 		mdCfg.opts = mdOpts
+		startProgress(len(urls))
 		articles := fetchMultipleArticles(urls, mdCfg)
 		if len(articles) == 0 {
+			finishProgress("FAILED -- no articles converted")
 			return fmt.Errorf("no articles converted")
 		}
 		md, err := articlesToMarkdown(articles)
 		if err != nil {
+			finishProgress("FAILED -- " + err.Error())
 			return err
 		}
 		if err := writeOutput(cfg.output, md+"\n"); err != nil {
+			finishProgress("FAILED -- " + err.Error())
 			return err
 		}
 		if cfg.output != "" {
-			pprintf("✅ Wrote %s (%d articles)\n", cfg.output, len(articles))
+			finishProgress(fmt.Sprintf("DONE -- wrote %s (%d articles)", cfg.output, len(articles)))
+		} else {
+			finishProgress("DONE")
 		}
 		return nil
 	}
@@ -316,18 +331,20 @@ func run(cfg cliConfig) error {
 		return fmt.Errorf("single URL mode requires exactly one URL argument")
 	}
 
-	pprintf("📥 Fetching article...\n")
+	startProgress(1)
 	final, _, _, err := processURL(cfg.args[0], cfg.opts, cfg.timeout, cfg.userAgent, cfg.titleOverride, cfg.concurrency)
 	if err != nil {
-		pprintf("  ❌ %s — %v\n", shortURL(cfg.args[0]), err)
+		finishProgress("FAILED -- " + err.Error())
 		return err
 	}
-	pprintf("  ✅ %s\n", shortURL(cfg.args[0]))
 	if err := writeOutput(cfg.output, final); err != nil {
+		finishProgress("FAILED -- " + err.Error())
 		return err
 	}
 	if cfg.output != "" {
-		pprintf("✅ Wrote %s\n", cfg.output)
+		finishProgress("DONE -- wrote " + cfg.output)
+	} else {
+		finishProgress("DONE")
 	}
 	return nil
 }

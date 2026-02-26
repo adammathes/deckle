@@ -14,13 +14,17 @@ import (
 	"time"
 )
 
-// withProgressCapture sets progressOut to a buffer, runs fn, restores
-// progressOut, and returns the captured output.
+// withProgressCapture enables progress output to a buffer, runs fn, and
+// returns the captured output. run() creates its own tracker via startProgress.
 func withProgressCapture(fn func()) string {
 	var buf bytes.Buffer
-	saved := progressOut
+	savedProgress := progress
+	savedOut := progressOut
 	progressOut = &buf
-	defer func() { progressOut = saved }()
+	defer func() {
+		progress = savedProgress
+		progressOut = savedOut
+	}()
 	fn()
 	return buf.String()
 }
@@ -52,24 +56,6 @@ func TestShortURL_Truncation(t *testing.T) {
 	if !strings.HasSuffix(result, "...") {
 		t.Error("truncated shortURL should end with ...")
 	}
-}
-
-func TestPprintf(t *testing.T) {
-	output := withProgressCapture(func() {
-		pprintf("hello %s %d\n", "world", 42)
-	})
-	if output != "hello world 42\n" {
-		t.Errorf("pprintf output = %q, want %q", output, "hello world 42\n")
-	}
-}
-
-func TestPprintf_NoOutput_WhenDiscard(t *testing.T) {
-	saved := progressOut
-	progressOut = io.Discard
-	defer func() { progressOut = saved }()
-
-	// Just ensure no panic; output goes nowhere.
-	pprintf("this goes nowhere: %d\n", 1)
 }
 
 func TestProgress_SingleURL_WithOutput(t *testing.T) {
@@ -105,33 +91,30 @@ content for readability to extract it as the main article. More text here.</p>
 		}
 	})
 
-	if !strings.Contains(output, "📥") {
-		t.Errorf("expected 📥 fetch indicator in progress output, got:\n%s", output)
+	if !strings.Contains(output, "DONE") {
+		t.Errorf("expected DONE in progress output, got:\n%s", output)
 	}
-	if !strings.Contains(output, "✅") {
-		t.Errorf("expected ✅ success indicator in progress output, got:\n%s", output)
-	}
-	if !strings.Contains(output, "Wrote") {
-		t.Errorf("expected 'Wrote' in progress output, got:\n%s", output)
+	if !strings.Contains(output, "wrote") {
+		t.Errorf("expected 'wrote' in progress output, got:\n%s", output)
 	}
 }
 
 func TestProgress_SingleURL_NoOutput_NoProgress(t *testing.T) {
 	// When no -o flag is set, progressOut should remain io.Discard.
-	// pprintf calls should produce no output.
 	saved := progressOut
 	progressOut = io.Discard
 	defer func() { progressOut = saved }()
 
-	var buf bytes.Buffer
-	progressOut = &buf
+	savedP := progress
+	progress = nil
+	defer func() { progress = savedP }()
 
-	// Simulate: no -o flag, single URL mode. We just test pprintf directly
-	// since run() doesn't touch progressOut anymore.
-	pprintf("should appear\n")
-	if buf.String() != "should appear\n" {
-		t.Errorf("unexpected output: %q", buf.String())
-	}
+	// Verify helper functions are safe to call with nil progress.
+	progressArticleDone()
+	progressArticleFailed()
+	progressAddImages(5)
+	progressImageDone()
+	finishProgress("DONE")
 }
 
 func TestProgress_EpubMode_MultipleArticles(t *testing.T) {
@@ -179,20 +162,18 @@ func TestProgress_EpubMode_MultipleArticles(t *testing.T) {
 		}
 	})
 
-	// Should show fetch header
-	if !strings.Contains(output, "📥 Fetching 3 articles") {
-		t.Errorf("expected '📥 Fetching 3 articles' in progress, got:\n%s", output)
+	// Should show downloaded article progress
+	if !strings.Contains(output, "downloaded") {
+		t.Errorf("expected 'downloaded' in progress, got:\n%s", output)
 	}
-	// Should show per-article checkmarks (at least 3 articles + final)
-	if strings.Count(output, "✅") < 3 {
-		t.Errorf("expected at least 3 ✅ marks, got %d in:\n%s",
-			strings.Count(output, "✅"), output)
+	// Should reference article count
+	if !strings.Contains(output, "3") {
+		t.Errorf("expected article count '3' in progress, got:\n%s", output)
 	}
-	// Should show epub building
-	if !strings.Contains(output, "📦") {
-		t.Errorf("expected 📦 epub build indicator, got:\n%s", output)
+	// Should show DONE with output path
+	if !strings.Contains(output, "DONE") {
+		t.Errorf("expected DONE in progress, got:\n%s", output)
 	}
-	// Should show final output path
 	if !strings.Contains(output, "progress.epub") {
 		t.Errorf("expected output filename in progress, got:\n%s", output)
 	}
@@ -229,13 +210,12 @@ func TestProgress_EpubMode_WithFailedArticle(t *testing.T) {
 		}
 	})
 
-	// Should show success for good article
-	if !strings.Contains(output, "✅") {
-		t.Errorf("expected ✅ for successful article, got:\n%s", output)
+	// Should show DONE with failure count
+	if !strings.Contains(output, "DONE") {
+		t.Errorf("expected DONE in progress, got:\n%s", output)
 	}
-	// Should show failure for bad article
-	if !strings.Contains(output, "❌") {
-		t.Errorf("expected ❌ for failed article, got:\n%s", output)
+	if !strings.Contains(output, "failed") {
+		t.Errorf("expected 'failed' count in progress, got:\n%s", output)
 	}
 }
 
@@ -276,12 +256,12 @@ readability to extract it as the main article. More filler text here.</p>
 		}
 	})
 
-	// Should show image optimization summary
-	if !strings.Contains(output, "🖼️") {
-		t.Errorf("expected 🖼️ image optimization indicator in progress, got:\n%s", output)
+	// Should show image optimization progress
+	if !strings.Contains(output, "images") {
+		t.Errorf("expected 'images' in progress output, got:\n%s", output)
 	}
-	if !strings.Contains(output, "optimized") {
-		t.Errorf("expected 'optimized' in image progress, got:\n%s", output)
+	if !strings.Contains(output, "optimizing") {
+		t.Errorf("expected 'optimizing' in image progress, got:\n%s", output)
 	}
 }
 
@@ -330,12 +310,9 @@ readability to identify this as the main content region of the page.</p>
 		}
 	})
 
-	// Should show external image fetch indicator
-	if !strings.Contains(output, "🔗") {
-		t.Errorf("expected 🔗 external image fetch indicator, got:\n%s", output)
-	}
-	if !strings.Contains(output, "external images fetched") {
-		t.Errorf("expected 'external images fetched' in progress, got:\n%s", output)
+	// External images get embedded then optimized — should show image counter
+	if !strings.Contains(output, "images") {
+		t.Errorf("expected 'images' in progress output, got:\n%s", output)
 	}
 }
 
@@ -374,14 +351,14 @@ the content threshold for the readability algorithm.</p>
 		}
 	})
 
-	if !strings.Contains(output, "📥") {
-		t.Errorf("expected 📥 in markdown single-URL progress, got:\n%s", output)
+	if !strings.Contains(output, "fetching") {
+		t.Errorf("expected 'fetching' in markdown single-URL progress, got:\n%s", output)
 	}
-	if !strings.Contains(output, "✅") {
-		t.Errorf("expected ✅ in markdown single-URL progress, got:\n%s", output)
+	if !strings.Contains(output, "DONE") {
+		t.Errorf("expected 'DONE' in markdown single-URL progress, got:\n%s", output)
 	}
-	if !strings.Contains(output, "Wrote") {
-		t.Errorf("expected 'Wrote' in markdown single-URL progress, got:\n%s", output)
+	if !strings.Contains(output, "wrote") {
+		t.Errorf("expected 'wrote' in markdown single-URL progress, got:\n%s", output)
 	}
 }
 
@@ -419,36 +396,105 @@ readability to extract as the main article content region.</p>
 		}
 	})
 
-	if !strings.Contains(output, "📥 Fetching 2 articles") {
-		t.Errorf("expected '📥 Fetching 2 articles' in progress, got:\n%s", output)
+	if !strings.Contains(output, "downloaded") {
+		t.Errorf("expected 'downloaded' in progress, got:\n%s", output)
 	}
-	if !strings.Contains(output, "Wrote") {
-		t.Errorf("expected 'Wrote' in markdown multi-URL progress, got:\n%s", output)
+	if !strings.Contains(output, "DONE") {
+		t.Errorf("expected 'DONE' in markdown multi-URL progress, got:\n%s", output)
 	}
 }
 
 func TestProgress_ConcurrentSafety(t *testing.T) {
-	// Verify pprintf doesn't interleave output from concurrent goroutines.
-	output := withProgressCapture(func() {
-		done := make(chan struct{})
-		for i := 0; i < 10; i++ {
-			go func(n int) {
-				defer func() { done <- struct{}{} }()
-				pprintf("line %d\n", n)
-			}(i)
-		}
-		for i := 0; i < 10; i++ {
-			<-done
-		}
-	})
+	// Verify concurrent articleDone/imageDone calls don't panic.
+	var buf bytes.Buffer
+	savedProgress := progress
+	savedOut := progressOut
+	progressOut = &buf
+	progress = newStatusTracker(&buf, 10)
+	defer func() {
+		progress = savedProgress
+		progressOut = savedOut
+	}()
 
-	lines := strings.Split(strings.TrimSpace(output), "\n")
-	if len(lines) != 10 {
-		t.Errorf("expected 10 lines, got %d:\n%s", len(lines), output)
+	progressAddImages(20)
+	done := make(chan struct{})
+	for i := 0; i < 10; i++ {
+		go func() {
+			defer func() { done <- struct{}{} }()
+			progressArticleDone()
+			progressImageDone()
+			progressImageDone()
+		}()
 	}
-	for _, line := range lines {
-		if !strings.HasPrefix(line, "line ") {
-			t.Errorf("unexpected line format: %q", line)
-		}
+	for i := 0; i < 10; i++ {
+		<-done
+	}
+
+	finishProgress("DONE")
+	output := buf.String()
+	if !strings.Contains(output, "DONE") {
+		t.Errorf("expected DONE in concurrent progress output, got:\n%s", output)
+	}
+}
+
+func TestStatusTracker_Redraw(t *testing.T) {
+	var buf bytes.Buffer
+	s := newStatusTracker(&buf, 5)
+
+	// Initial state: no articles done, no images
+	s.mu.Lock()
+	s.redraw()
+	s.mu.Unlock()
+	out := buf.String()
+	if !strings.Contains(out, "downloaded 0/5") {
+		t.Errorf("expected 'downloaded 0/5' in initial redraw, got: %q", out)
+	}
+
+	// After some progress
+	buf.Reset()
+	s.articleDone()
+	s.addImages(8)
+	s.imageDone()
+	out = buf.String()
+	if !strings.Contains(out, "downloaded 1/5") {
+		t.Errorf("expected 'downloaded 1/5', got: %q", out)
+	}
+	if !strings.Contains(out, "optimizing 1/8 images") {
+		t.Errorf("expected 'optimizing 1/8 images', got: %q", out)
+	}
+}
+
+func TestStatusTracker_SingleArticle(t *testing.T) {
+	var buf bytes.Buffer
+	s := newStatusTracker(&buf, 1)
+
+	// Single article, no images yet: should show [fetching]
+	s.mu.Lock()
+	s.redraw()
+	s.mu.Unlock()
+	out := buf.String()
+	if !strings.Contains(out, "[fetching]") {
+		t.Errorf("expected '[fetching]' for single article, got: %q", out)
+	}
+
+	// After images discovered
+	buf.Reset()
+	s.addImages(3)
+	out = buf.String()
+	if !strings.Contains(out, "optimizing 0/3 images") {
+		t.Errorf("expected 'optimizing 0/3 images', got: %q", out)
+	}
+}
+
+func TestStatusTracker_Finish(t *testing.T) {
+	var buf bytes.Buffer
+	s := newStatusTracker(&buf, 1)
+	s.finish("DONE -- wrote output.html")
+	out := buf.String()
+	if !strings.Contains(out, "DONE -- wrote output.html") {
+		t.Errorf("expected finish message, got: %q", out)
+	}
+	if !strings.HasSuffix(out, "\n") {
+		t.Error("finish should end with newline")
 	}
 }
