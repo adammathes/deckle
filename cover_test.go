@@ -49,6 +49,60 @@ func TestGenerateCover_Pattern(t *testing.T) {
 	}
 }
 
+func TestGenerateCover_Typographic(t *testing.T) {
+	articles := []epubArticle{
+		{Title: "Article 1", Byline: "Author 1", SiteName: "Site 1"},
+		{Title: "Article 2", Byline: "Author 2", SiteName: "Site 2"},
+		{Title: "Article 3"},
+	}
+	data, err := generateCover("Weekly Reads", articles, "typographic")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(data) == 0 {
+		t.Fatal("cover PNG is empty")
+	}
+
+	img, err := png.Decode(bytes.NewReader(data))
+	if err != nil {
+		t.Fatalf("invalid PNG: %v", err)
+	}
+	bounds := img.Bounds()
+	if bounds.Dx() != coverWidth || bounds.Dy() != coverHeight {
+		t.Errorf("cover size = %dx%d, want %dx%d", bounds.Dx(), bounds.Dy(), coverWidth, coverHeight)
+	}
+}
+
+func TestGenerateCover_TypographicSingleArticle(t *testing.T) {
+	articles := []epubArticle{
+		{Title: "Only One"},
+	}
+	data, err := generateCover("Solo Read", articles, "typographic")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(data) == 0 {
+		t.Fatal("cover PNG is empty")
+	}
+}
+
+func TestGenerateCover_TypographicIsDefault(t *testing.T) {
+	articles := []epubArticle{{Title: "A"}}
+
+	// Unknown style should fall back to typographic (the default)
+	a, err := generateCover("Title", articles, "typographic")
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := generateCover("Title", articles, "unknown-style")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(a, b) {
+		t.Error("unknown style should fall back to typographic")
+	}
+}
+
 func TestGenerateCover_Deterministic(t *testing.T) {
 	articles := []epubArticle{{Title: "A"}}
 	a, err := generateCover("Same Title", articles, "collage")
@@ -66,16 +120,21 @@ func TestGenerateCover_Deterministic(t *testing.T) {
 
 func TestGenerateCover_DifferentStyles(t *testing.T) {
 	articles := []epubArticle{{Title: "A"}}
-	a, err := generateCover("Same Title", articles, "collage")
-	if err != nil {
-		t.Fatal(err)
+	styles := []string{"typographic", "collage", "pattern"}
+	covers := make(map[string][]byte)
+	for _, s := range styles {
+		data, err := generateCover("Same Title", articles, s)
+		if err != nil {
+			t.Fatalf("style %q: %v", s, err)
+		}
+		covers[s] = data
 	}
-	b, err := generateCover("Same Title", articles, "pattern")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if bytes.Equal(a, b) {
-		t.Error("different styles should produce different covers")
+	for i := 0; i < len(styles); i++ {
+		for j := i + 1; j < len(styles); j++ {
+			if bytes.Equal(covers[styles[i]], covers[styles[j]]) {
+				t.Errorf("styles %q and %q should produce different covers", styles[i], styles[j])
+			}
+		}
 	}
 }
 
@@ -192,7 +251,7 @@ func TestBuildEpub_HasCover(t *testing.T) {
 	}
 
 	outPath := filepath.Join(t.TempDir(), "cover_test.epub")
-	if err := buildEpub(articles, "Cover Test", outPath, "collage"); err != nil {
+	if err := buildEpub(articles, "Cover Test", outPath, "typographic"); err != nil {
 		t.Fatal(err)
 	}
 

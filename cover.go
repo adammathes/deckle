@@ -1,5 +1,5 @@
 // Cover image generation for epub output.
-// Supports multiple cover styles: "collage" (default) and "pattern".
+// Supports multiple cover styles: "typographic" (default), "collage", and "pattern".
 package main
 
 import (
@@ -11,6 +11,7 @@ import (
 	"image/png"
 	"math"
 	"strings"
+	"time"
 
 	"golang.org/x/image/draw"
 	"golang.org/x/image/font"
@@ -51,9 +52,11 @@ func generateCover(title string, articles []epubArticle, style string) ([]byte, 
 		drawPatternCover(img, title, len(articles), boldFace, regularFace)
 	case "collage":
 		drawCollageCover(img, title, articles, boldFace, regularFace, smallFace)
+	case "typographic":
+		drawTypographicCover(img, title, len(articles), boldFace, regularFace)
 	default:
-		// Default to collage if unknown
-		drawCollageCover(img, title, articles, boldFace, regularFace, smallFace)
+		// Default to typographic if unknown
+		drawTypographicCover(img, title, len(articles), boldFace, regularFace)
 	}
 
 	// Draw "deckle" in bottom-right (common to all styles)
@@ -74,6 +77,75 @@ func drawPatternCover(img *image.Gray, title string, articleCount int, titleFace
 
 	// Draw title block in the centre
 	drawTitleBlock(img, title, articleCount, titleFace, metaFace)
+}
+
+// drawTypographicCover implements a clean, minimal text-only cover.
+// Large title centred vertically, divider rule, article count, and date.
+func drawTypographicCover(img *image.Gray, title string, articleCount int, titleFace, metaFace font.Face) {
+	const (
+		padX     = 120
+		maxWidth = coverWidth - padX*2
+	)
+
+	// Word-wrap the title
+	lines := wrapText(strings.ToUpper(title), titleFace, maxWidth)
+	titleLineH := titleFace.Metrics().Height.Ceil() + 8
+	metaLineH := metaFace.Metrics().Height.Ceil() + 12
+
+	// Compute total block height:
+	//   title lines + gap + divider + gap + article count + date
+	dividerGap := 50
+	totalHeight := len(lines)*titleLineH + dividerGap + 6 + dividerGap + metaLineH + metaLineH
+
+	// Start Y so the block is vertically centred (slightly above true centre)
+	startY := (coverHeight-totalHeight)/2 - 60
+	y := startY
+
+	// Draw title lines (centred horizontally)
+	for _, line := range lines {
+		lineW := font.MeasureString(titleFace, line).Ceil()
+		x := (coverWidth - lineW) / 2
+		drawString(img, line, titleFace, x, y+titleFace.Metrics().Ascent.Ceil())
+		y += titleLineH
+	}
+
+	// Gap before divider
+	y += dividerGap
+
+	// Draw a thin centred divider rule
+	titleW := 0
+	for _, line := range lines {
+		w := font.MeasureString(titleFace, line).Ceil()
+		if w > titleW {
+			titleW = w
+		}
+	}
+	ruleW := titleW
+	if ruleW > maxWidth {
+		ruleW = maxWidth
+	}
+	ruleX := (coverWidth - ruleW) / 2
+	for x := ruleX; x < ruleX+ruleW; x++ {
+		img.SetGray(x, y, color.Gray{0x00})
+	}
+
+	// Gap after divider
+	y += dividerGap
+
+	// Article count
+	countText := fmt.Sprintf("%d articles", articleCount)
+	if articleCount == 1 {
+		countText = "1 article"
+	}
+	countW := font.MeasureString(metaFace, countText).Ceil()
+	drawString(img, countText, metaFace, (coverWidth-countW)/2, y+metaFace.Metrics().Ascent.Ceil())
+	y += metaLineH
+
+	// Date (month and year)
+	now := time.Now()
+	dateText := now.Format("Jan 2006")
+	dateW := font.MeasureString(metaFace, dateText).Ceil()
+	drawString(img, dateText, metaFace, (coverWidth-dateW)/2, y+metaFace.Metrics().Ascent.Ceil())
 }
 
 // drawCollageCover implements the Table-of-Contents Collage style.
