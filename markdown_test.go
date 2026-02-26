@@ -181,19 +181,18 @@ func TestArticlesToMarkdown_Empty(t *testing.T) {
 
 // ---------- integration tests via run() ----------
 
-func TestRun_MarkdownAndEpubMutuallyExclusive(t *testing.T) {
+func TestRun_FormatValidation(t *testing.T) {
 	cfg := cliConfig{
-		markdownMode: true,
-		epubMode:     true,
-		concurrency:  1,
-		args:         []string{"https://example.com"},
+		format:      "invalid",
+		concurrency: 1,
+		args:        []string{"https://example.com"},
 	}
 	err := run(cfg)
 	if err == nil {
-		t.Fatal("expected error when both -markdown and -epub are set")
+		t.Fatal("expected error for invalid format")
 	}
-	if !strings.Contains(err.Error(), "mutually exclusive") {
-		t.Errorf("expected 'mutually exclusive' error, got: %v", err)
+	if !strings.Contains(err.Error(), "unknown format") {
+		t.Errorf("expected 'unknown format' error, got: %v", err)
 	}
 }
 
@@ -209,13 +208,13 @@ func TestRun_MarkdownMode_SingleURL(t *testing.T) {
 	outFile := filepath.Join(tmpDir, "out.md")
 
 	cfg := cliConfig{
-		opts:         optimizeOpts{maxWidth: 800, quality: 60},
-		output:       outFile,
-		markdownMode: true,
-		timeout:      5 * time.Second,
-		userAgent:    "test-agent",
-		concurrency:  2,
-		args:         []string{srv.URL},
+		opts:        optimizeOpts{maxWidth: 800, quality: 60},
+		output:      outFile,
+		format:      "markdown",
+		timeout:     5 * time.Second,
+		userAgent:   "test-agent",
+		concurrency: 2,
+		args:        []string{srv.URL},
 	}
 	logOut = os.Stderr // ensure logOut is set
 
@@ -264,13 +263,13 @@ func TestRun_MarkdownMode_MultiURL(t *testing.T) {
 	outFile := filepath.Join(tmpDir, "combined.md")
 
 	cfg := cliConfig{
-		opts:         optimizeOpts{maxWidth: 800, quality: 60},
-		output:       outFile,
-		markdownMode: true,
-		timeout:      5 * time.Second,
-		userAgent:    "test-agent",
-		concurrency:  2,
-		args:         []string{srv.URL + "/article1", srv.URL + "/article2"},
+		opts:        optimizeOpts{maxWidth: 800, quality: 60},
+		output:      outFile,
+		format:      "markdown",
+		timeout:     5 * time.Second,
+		userAgent:   "test-agent",
+		concurrency: 2,
+		args:        []string{srv.URL + "/article1", srv.URL + "/article2"},
 	}
 
 	if err := run(cfg); err != nil {
@@ -318,13 +317,13 @@ is long enough to satisfy the readability content extraction algorithm.</p>
 	outFile := filepath.Join(tmpDir, "img_test.md")
 
 	cfg := cliConfig{
-		opts:         optimizeOpts{maxWidth: 800, quality: 60},
-		output:       outFile,
-		markdownMode: true,
-		timeout:      5 * time.Second,
-		userAgent:    "test-agent",
-		concurrency:  2,
-		args:         []string{srv.URL},
+		opts:        optimizeOpts{maxWidth: 800, quality: 60},
+		output:      outFile,
+		format:      "markdown",
+		timeout:     5 * time.Second,
+		userAgent:   "test-agent",
+		concurrency: 2,
+		args:        []string{srv.URL},
 	}
 
 	if err := run(cfg); err != nil {
@@ -372,13 +371,13 @@ This paragraph provides sufficient content for readability extraction.</p>
 
 	outFile := filepath.Join(t.TempDir(), "out.md")
 	cfg := cliConfig{
-		opts:         optimizeOpts{maxWidth: 800, quality: 60},
-		output:       outFile,
-		markdownMode: true,
-		timeout:      5 * time.Second,
-		userAgent:    "test-agent",
-		concurrency:  2,
-		args:         []string{articleSrv.URL},
+		opts:        optimizeOpts{maxWidth: 800, quality: 60},
+		output:      outFile,
+		format:      "markdown",
+		timeout:     5 * time.Second,
+		userAgent:   "test-agent",
+		concurrency: 2,
+		args:        []string{articleSrv.URL},
 	}
 
 	if err := run(cfg); err != nil {

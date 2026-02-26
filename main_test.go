@@ -330,6 +330,7 @@ ensure the content threshold is met by the readability algorithm.</p>
 	cfg := cliConfig{
 		opts:      optimizeOpts{maxWidth: 800, quality: 60},
 		output:    outFile,
+		format:    "html",
 		timeout:   5 * time.Second,
 		userAgent: "test-agent",
 		args:      []string{srv.URL},
@@ -369,6 +370,7 @@ content for readability to extract it as the main article properly.</p>
 	// No output file - goes to stdout
 	cfg := cliConfig{
 		opts:      optimizeOpts{maxWidth: 800, quality: 60},
+		format:    "html",
 		timeout:   5 * time.Second,
 		userAgent: "test-agent",
 		args:      []string{srv.URL},
@@ -402,9 +404,9 @@ readability to extract it as the main article content. More text here.</p>
 	cfg := cliConfig{
 		opts:      optimizeOpts{maxWidth: 800, quality: 60},
 		output:    outFile,
+		format:    "epub",
 		timeout:   5 * time.Second,
 		userAgent: "test-agent",
-		epubMode:  true,
 		args:      []string{srv.URL},
 	}
 
@@ -447,9 +449,9 @@ for readability to work with. More padding text for the algorithm.</p>
 	cfg := cliConfig{
 		opts:      optimizeOpts{maxWidth: 800, quality: 60},
 		output:    outFile,
+		format:    "epub",
 		timeout:   5 * time.Second,
 		userAgent: "test-agent",
-		epubMode:  true,
 		args:      []string{urlFile},
 	}
 
@@ -495,9 +497,9 @@ func TestRun_EpubMode_MultipleArticles(t *testing.T) {
 		opts:          optimizeOpts{maxWidth: 800, quality: 60},
 		output:        outFile,
 		titleOverride: "Multi Book",
+		format:        "epub",
 		timeout:       5 * time.Second,
 		userAgent:     "test-agent",
-		epubMode:      true,
 		args:          []string{srv.URL + "/1", srv.URL + "/2"},
 	}
 
@@ -509,9 +511,9 @@ func TestRun_EpubMode_MultipleArticles(t *testing.T) {
 
 func TestRun_EpubMode_NoOutput(t *testing.T) {
 	cfg := cliConfig{
-		opts:     optimizeOpts{maxWidth: 800, quality: 60},
-		epubMode: true,
-		args:     []string{"https://example.com"},
+		opts:   optimizeOpts{maxWidth: 800, quality: 60},
+		format: "epub",
+		args:   []string{"https://example.com"},
 	}
 	err := run(cfg)
 	if err == nil {
@@ -521,10 +523,10 @@ func TestRun_EpubMode_NoOutput(t *testing.T) {
 
 func TestRun_EpubMode_NoArgs(t *testing.T) {
 	cfg := cliConfig{
-		opts:     optimizeOpts{maxWidth: 800, quality: 60},
-		output:   "out.epub",
-		epubMode: true,
-		args:     []string{},
+		opts:   optimizeOpts{maxWidth: 800, quality: 60},
+		output: "out.epub",
+		format: "epub",
+		args:   []string{},
 	}
 	err := run(cfg)
 	if err == nil {
@@ -532,25 +534,46 @@ func TestRun_EpubMode_NoArgs(t *testing.T) {
 	}
 }
 
-func TestRun_SingleMode_NoArgs(t *testing.T) {
+func TestRun_NoArgs(t *testing.T) {
+	cfg := cliConfig{
+		opts:   optimizeOpts{maxWidth: 800, quality: 60},
+		format: "html",
+		args:   []string{},
+	}
+	err := run(cfg)
+	if err == nil {
+		t.Error("expected error when no args provided")
+	}
+}
+
+func TestRun_UnknownFormat(t *testing.T) {
+	cfg := cliConfig{
+		opts:   optimizeOpts{maxWidth: 800, quality: 60},
+		format: "pdf",
+		args:   []string{"https://example.com"},
+	}
+	err := run(cfg)
+	if err == nil {
+		t.Error("expected error for unknown format")
+	}
+	if !strings.Contains(err.Error(), "unknown format") {
+		t.Errorf("expected 'unknown format' error, got: %v", err)
+	}
+}
+
+func TestRun_DefaultFormatIsMarkdown(t *testing.T) {
+	// When no format is set, default should be markdown
 	cfg := cliConfig{
 		opts: optimizeOpts{maxWidth: 800, quality: 60},
 		args: []string{},
 	}
 	err := run(cfg)
+	// Will fail because no URLs, but the error should be about URLs, not format
 	if err == nil {
-		t.Error("expected error when single mode has no args")
+		t.Error("expected error")
 	}
-}
-
-func TestRun_SingleMode_TooManyArgs(t *testing.T) {
-	cfg := cliConfig{
-		opts: optimizeOpts{maxWidth: 800, quality: 60},
-		args: []string{"url1", "url2"},
-	}
-	err := run(cfg)
-	if err == nil {
-		t.Error("expected error when single mode has too many args")
+	if strings.Contains(err.Error(), "format") {
+		t.Errorf("default format should be valid, got: %v", err)
 	}
 }
 
