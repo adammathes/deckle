@@ -14,16 +14,17 @@ import (
 	"time"
 )
 
-// withProgressCapture enables progress output to a buffer, runs fn, and
-// returns the captured output. run() creates its own tracker via startProgress.
-func withProgressCapture(fn func()) string {
+// withVerboseCapture enables verbose output to a buffer, runs fn, restores
+// state, and returns the captured output.
+func withVerboseCapture(fn func()) string {
 	var buf bytes.Buffer
-	savedProgress := progress
-	savedOut := progressOut
-	progressOut = &buf
+	savedVerbose := verboseOut
+	savedLog := logOut
+	verboseOut = &buf
+	logOut = &buf
 	defer func() {
-		progress = savedProgress
-		progressOut = savedOut
+		verboseOut = savedVerbose
+		logOut = savedLog
 	}()
 	fn()
 	return buf.String()
@@ -58,7 +59,45 @@ func TestShortURL_Truncation(t *testing.T) {
 	}
 }
 
-func TestProgress_SingleURL_WithOutput(t *testing.T) {
+func TestVprintf(t *testing.T) {
+	var buf bytes.Buffer
+	saved := verboseOut
+	verboseOut = &buf
+	defer func() { verboseOut = saved }()
+
+	vprintf("hello %s %d\n", "world", 42)
+	if buf.String() != "hello world 42\n" {
+		t.Errorf("vprintf output = %q, want %q", buf.String(), "hello world 42\n")
+	}
+}
+
+func TestVprintf_NoOutput_WhenDiscard(t *testing.T) {
+	saved := verboseOut
+	verboseOut = io.Discard
+	defer func() { verboseOut = saved }()
+
+	// Just ensure no panic; output goes nowhere.
+	vprintf("this goes nowhere: %d\n", 1)
+}
+
+func TestDefaultSilence(t *testing.T) {
+	// By default, logOut and verboseOut should be io.Discard.
+	// We can't test the actual defaults since other tests may have run,
+	// but we verify the helpers are safe to call with Discard.
+	saved := verboseOut
+	savedLog := logOut
+	verboseOut = io.Discard
+	logOut = io.Discard
+	defer func() {
+		verboseOut = saved
+		logOut = savedLog
+	}()
+
+	vprintf("should not appear\n")
+	fmt.Fprintf(logOut, "should not appear\n")
+}
+
+func TestVerbose_SingleURL_WithOutput(t *testing.T) {
 	pageHTML := `<!DOCTYPE html>
 <html><head><title>Single Progress</title></head><body>
 <article>
@@ -84,40 +123,19 @@ content for readability to extract it as the main article. More text here.</p>
 		args:      []string{srv.URL},
 	}
 
-	output := withProgressCapture(func() {
+	output := withVerboseCapture(func() {
 		err := run(cfg)
 		if err != nil {
 			t.Fatal(err)
 		}
 	})
 
-	if !strings.Contains(output, "DONE") {
-		t.Errorf("expected DONE in progress output, got:\n%s", output)
-	}
-	if !strings.Contains(output, "wrote") {
-		t.Errorf("expected 'wrote' in progress output, got:\n%s", output)
+	if !strings.Contains(output, "Downloading 1 article") {
+		t.Errorf("expected 'Downloading 1 article' in verbose output, got:\n%s", output)
 	}
 }
 
-func TestProgress_SingleURL_NoOutput_NoProgress(t *testing.T) {
-	// When no -o flag is set, progressOut should remain io.Discard.
-	saved := progressOut
-	progressOut = io.Discard
-	defer func() { progressOut = saved }()
-
-	savedP := progress
-	progress = nil
-	defer func() { progress = savedP }()
-
-	// Verify helper functions are safe to call with nil progress.
-	progressArticleDone()
-	progressArticleFailed()
-	progressAddImages(5)
-	progressImageDone()
-	finishProgress("DONE")
-}
-
-func TestProgress_EpubMode_MultipleArticles(t *testing.T) {
+func TestVerbose_EpubMode_MultipleArticles(t *testing.T) {
 	articlesByPath := map[string]string{
 		"/1": `<!DOCTYPE html><html><head><title>Article One</title></head><body>
 		<article><h1>Article One</h1>
@@ -155,31 +173,22 @@ func TestProgress_EpubMode_MultipleArticles(t *testing.T) {
 		args:      []string{srv.URL + "/1", srv.URL + "/2", srv.URL + "/3"},
 	}
 
-	output := withProgressCapture(func() {
+	output := withVerboseCapture(func() {
 		err := run(cfg)
 		if err != nil {
 			t.Fatal(err)
 		}
 	})
 
-	// Should show downloaded article progress
-	if !strings.Contains(output, "downloaded") {
-		t.Errorf("expected 'downloaded' in progress, got:\n%s", output)
+	if !strings.Contains(output, "Downloading 3 articles") {
+		t.Errorf("expected 'Downloading 3 articles' in verbose, got:\n%s", output)
 	}
-	// Should reference article count
-	if !strings.Contains(output, "3") {
-		t.Errorf("expected article count '3' in progress, got:\n%s", output)
-	}
-	// Should show DONE with output path
-	if !strings.Contains(output, "DONE") {
-		t.Errorf("expected DONE in progress, got:\n%s", output)
-	}
-	if !strings.Contains(output, "progress.epub") {
-		t.Errorf("expected output filename in progress, got:\n%s", output)
+	if !strings.Contains(output, "Building epub at") {
+		t.Errorf("expected 'Building epub at' in verbose, got:\n%s", output)
 	}
 }
 
-func TestProgress_EpubMode_WithFailedArticle(t *testing.T) {
+func TestVerbose_EpubMode_WithFailedArticle(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		if r.URL.Path == "/good" {
@@ -203,23 +212,23 @@ func TestProgress_EpubMode_WithFailedArticle(t *testing.T) {
 		args:      []string{srv.URL + "/good", srv.URL + "/bad"},
 	}
 
-	output := withProgressCapture(func() {
+	output := withVerboseCapture(func() {
 		err := run(cfg)
 		if err != nil {
 			t.Fatal(err)
 		}
 	})
 
-	// Should show DONE with failure count
-	if !strings.Contains(output, "DONE") {
-		t.Errorf("expected DONE in progress, got:\n%s", output)
+	// Should show download line and error for bad article
+	if !strings.Contains(output, "Downloading 2 articles") {
+		t.Errorf("expected 'Downloading 2 articles' in verbose, got:\n%s", output)
 	}
-	if !strings.Contains(output, "failed") {
-		t.Errorf("expected 'failed' count in progress, got:\n%s", output)
+	if !strings.Contains(output, "Error") {
+		t.Errorf("expected 'Error' for failed article in verbose, got:\n%s", output)
 	}
 }
 
-func TestProgress_WithImages(t *testing.T) {
+func TestVerbose_WithImages(t *testing.T) {
 	imgData := makePNG(1200, 900, color.NRGBA{200, 100, 50, 255})
 	imgURI := "data:image/png;base64," + base64.StdEncoding.EncodeToString(imgData)
 
@@ -249,23 +258,22 @@ readability to extract it as the main article. More filler text here.</p>
 		args:      []string{srv.URL},
 	}
 
-	output := withProgressCapture(func() {
+	output := withVerboseCapture(func() {
 		err := run(cfg)
 		if err != nil {
 			t.Fatal(err)
 		}
 	})
 
-	// Should show image optimization progress
-	if !strings.Contains(output, "images") {
-		t.Errorf("expected 'images' in progress output, got:\n%s", output)
+	if !strings.Contains(output, "Optimizing") {
+		t.Errorf("expected 'Optimizing' in verbose output, got:\n%s", output)
 	}
-	if !strings.Contains(output, "optimizing") {
-		t.Errorf("expected 'optimizing' in image progress, got:\n%s", output)
+	if !strings.Contains(output, "images") {
+		t.Errorf("expected 'images' in verbose output, got:\n%s", output)
 	}
 }
 
-func TestProgress_ExternalImages(t *testing.T) {
+func TestVerbose_ExternalImages(t *testing.T) {
 	imgData := makePNG(100, 100, color.NRGBA{255, 0, 0, 255})
 
 	var srv *httptest.Server
@@ -303,20 +311,22 @@ readability to identify this as the main content region of the page.</p>
 		args:      []string{srv.URL},
 	}
 
-	output := withProgressCapture(func() {
+	output := withVerboseCapture(func() {
 		err := run(cfg)
 		if err != nil {
 			t.Fatal(err)
 		}
 	})
 
-	// External images get embedded then optimized — should show image counter
+	if !strings.Contains(output, "Fetching") {
+		t.Errorf("expected 'Fetching' in verbose output, got:\n%s", output)
+	}
 	if !strings.Contains(output, "images") {
-		t.Errorf("expected 'images' in progress output, got:\n%s", output)
+		t.Errorf("expected 'images' in verbose output, got:\n%s", output)
 	}
 }
 
-func TestProgress_MarkdownMode_SingleURL(t *testing.T) {
+func TestVerbose_MarkdownMode_SingleURL(t *testing.T) {
 	pageHTML := `<!DOCTYPE html>
 <html><head><title>MD Progress</title></head><body>
 <article>
@@ -344,25 +354,19 @@ the content threshold for the readability algorithm.</p>
 		args:         []string{srv.URL},
 	}
 
-	output := withProgressCapture(func() {
+	output := withVerboseCapture(func() {
 		err := run(cfg)
 		if err != nil {
 			t.Fatal(err)
 		}
 	})
 
-	if !strings.Contains(output, "fetching") {
-		t.Errorf("expected 'fetching' in markdown single-URL progress, got:\n%s", output)
-	}
-	if !strings.Contains(output, "DONE") {
-		t.Errorf("expected 'DONE' in markdown single-URL progress, got:\n%s", output)
-	}
-	if !strings.Contains(output, "wrote") {
-		t.Errorf("expected 'wrote' in markdown single-URL progress, got:\n%s", output)
+	if !strings.Contains(output, "Downloading 1 article") {
+		t.Errorf("expected 'Downloading 1 article' in verbose, got:\n%s", output)
 	}
 }
 
-func TestProgress_MarkdownMode_MultipleURLs(t *testing.T) {
+func TestVerbose_MarkdownMode_MultipleURLs(t *testing.T) {
 	pageHTML := `<!DOCTYPE html>
 <html><head><title>Multi MD Progress</title></head><body>
 <article>
@@ -389,112 +393,43 @@ readability to extract as the main article content region.</p>
 		args:         []string{srv.URL + "/a", srv.URL + "/b"},
 	}
 
-	output := withProgressCapture(func() {
+	output := withVerboseCapture(func() {
 		err := run(cfg)
 		if err != nil {
 			t.Fatal(err)
 		}
 	})
 
-	if !strings.Contains(output, "downloaded") {
-		t.Errorf("expected 'downloaded' in progress, got:\n%s", output)
-	}
-	if !strings.Contains(output, "DONE") {
-		t.Errorf("expected 'DONE' in markdown multi-URL progress, got:\n%s", output)
+	if !strings.Contains(output, "Downloading 2 articles") {
+		t.Errorf("expected 'Downloading 2 articles' in verbose, got:\n%s", output)
 	}
 }
 
-func TestProgress_ConcurrentSafety(t *testing.T) {
-	// Verify concurrent articleDone/imageDone calls don't panic.
+func TestVerbose_ConcurrentSafety(t *testing.T) {
+	// Verify concurrent vprintf calls don't interleave.
 	var buf bytes.Buffer
-	savedProgress := progress
-	savedOut := progressOut
-	progressOut = &buf
-	progress = newStatusTracker(&buf, 10)
-	defer func() {
-		progress = savedProgress
-		progressOut = savedOut
-	}()
+	saved := verboseOut
+	verboseOut = &buf
+	defer func() { verboseOut = saved }()
 
-	progressAddImages(20)
 	done := make(chan struct{})
 	for i := 0; i < 10; i++ {
-		go func() {
+		go func(n int) {
 			defer func() { done <- struct{}{} }()
-			progressArticleDone()
-			progressImageDone()
-			progressImageDone()
-		}()
+			vprintf("line %d\n", n)
+		}(i)
 	}
 	for i := 0; i < 10; i++ {
 		<-done
 	}
 
-	finishProgress("DONE")
-	output := buf.String()
-	if !strings.Contains(output, "DONE") {
-		t.Errorf("expected DONE in concurrent progress output, got:\n%s", output)
+	lines := strings.Split(strings.TrimSpace(buf.String()), "\n")
+	if len(lines) != 10 {
+		t.Errorf("expected 10 lines, got %d:\n%s", len(lines), buf.String())
 	}
-}
-
-func TestStatusTracker_Redraw(t *testing.T) {
-	var buf bytes.Buffer
-	s := newStatusTracker(&buf, 5)
-
-	// Initial state: no articles done, no images
-	s.mu.Lock()
-	s.redraw()
-	s.mu.Unlock()
-	out := buf.String()
-	if !strings.Contains(out, "downloaded 0/5") {
-		t.Errorf("expected 'downloaded 0/5' in initial redraw, got: %q", out)
-	}
-
-	// After some progress
-	buf.Reset()
-	s.articleDone()
-	s.addImages(8)
-	s.imageDone()
-	out = buf.String()
-	if !strings.Contains(out, "downloaded 1/5") {
-		t.Errorf("expected 'downloaded 1/5', got: %q", out)
-	}
-	if !strings.Contains(out, "optimizing 1/8 images") {
-		t.Errorf("expected 'optimizing 1/8 images', got: %q", out)
-	}
-}
-
-func TestStatusTracker_SingleArticle(t *testing.T) {
-	var buf bytes.Buffer
-	s := newStatusTracker(&buf, 1)
-
-	// Single article, no images yet: should show [fetching]
-	s.mu.Lock()
-	s.redraw()
-	s.mu.Unlock()
-	out := buf.String()
-	if !strings.Contains(out, "[fetching]") {
-		t.Errorf("expected '[fetching]' for single article, got: %q", out)
-	}
-
-	// After images discovered
-	buf.Reset()
-	s.addImages(3)
-	out = buf.String()
-	if !strings.Contains(out, "optimizing 0/3 images") {
-		t.Errorf("expected 'optimizing 0/3 images', got: %q", out)
-	}
-}
-
-func TestStatusTracker_Finish(t *testing.T) {
-	var buf bytes.Buffer
-	s := newStatusTracker(&buf, 1)
-	s.finish("DONE -- wrote output.html")
-	out := buf.String()
-	if !strings.Contains(out, "DONE -- wrote output.html") {
-		t.Errorf("expected finish message, got: %q", out)
-	}
-	if !strings.HasSuffix(out, "\n") {
-		t.Error("finish should end with newline")
+	for _, line := range lines {
+		if !strings.HasPrefix(line, "line ") {
+			t.Errorf("unexpected line format: %q", line)
+		}
 	}
 }
