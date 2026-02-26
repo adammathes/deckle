@@ -211,11 +211,15 @@ func run(cfg cliConfig) error {
 			return fmt.Errorf("no URLs provided")
 		}
 
-		vprintf("Downloading %d articles\n", len(urls))
+		totalImages.Store(0)
+		vprintf("Fetching %d URLs\n", len(urls))
 
 		articles := fetchMultipleArticles(urls, cfg)
 		if len(articles) == 0 {
 			return fmt.Errorf("no articles converted")
+		}
+		if n := totalImages.Load(); n > 0 {
+			vprintf("Fetching, optimizing and embedding %d images\n", n)
 		}
 
 		// Derive book title: -title flag > .txt filename > first article title > output filename
@@ -263,7 +267,7 @@ func run(cfg cliConfig) error {
 		mdOpts.skipImageFetch = true
 
 		if len(urls) == 1 {
-			vprintf("Downloading 1 article\n")
+			vprintf("Fetching 1 URL\n")
 			final, _, _, err := processURL(urls[0], mdOpts, cfg.timeout, cfg.userAgent, cfg.titleOverride, cfg.concurrency)
 			if err != nil {
 				return err
@@ -278,7 +282,7 @@ func run(cfg cliConfig) error {
 		// Multiple URLs: fetch in parallel, concatenate with separators.
 		mdCfg := cfg
 		mdCfg.opts = mdOpts
-		vprintf("Downloading %d articles\n", len(urls))
+		vprintf("Fetching %d URLs\n", len(urls))
 		articles := fetchMultipleArticles(urls, mdCfg)
 		if len(articles) == 0 {
 			return fmt.Errorf("no articles converted")
@@ -295,10 +299,14 @@ func run(cfg cliConfig) error {
 		return fmt.Errorf("single URL mode requires exactly one URL argument")
 	}
 
-	vprintf("Downloading 1 article\n")
+	totalImages.Store(0)
+	vprintf("Fetching 1 URL\n")
 	final, _, _, err := processURL(cfg.args[0], cfg.opts, cfg.timeout, cfg.userAgent, cfg.titleOverride, cfg.concurrency)
 	if err != nil {
 		return err
+	}
+	if n := totalImages.Load(); n > 0 {
+		vprintf("Fetching, optimizing and embedding %d images\n", n)
 	}
 	return writeOutput(cfg.output, final)
 }
@@ -329,7 +337,6 @@ func main() {
 
 	if *verbose {
 		verboseOut = os.Stderr
-		logOut = os.Stderr
 	}
 
 	maxResponseBytes = *maxRespSize

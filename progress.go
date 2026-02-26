@@ -7,21 +7,19 @@ import (
 	"io"
 	"net/url"
 	"strings"
-	"sync"
+	"sync/atomic"
 )
 
 // verboseOut is the writer for verbose summary lines. Set to os.Stderr
 // when -v is specified, otherwise io.Discard (silent by default).
 var verboseOut io.Writer = io.Discard
 
-// verboseMu serialises writes to verboseOut so concurrent goroutines
-// don't interleave output lines.
-var verboseMu sync.Mutex
+// totalImages tracks the aggregate image count across all articles,
+// incremented inside processArticleImages and read after all fetches complete.
+var totalImages atomic.Int64
 
 // vprintf writes a formatted line to verboseOut when -v is active.
 func vprintf(format string, args ...any) {
-	verboseMu.Lock()
-	defer verboseMu.Unlock()
 	fmt.Fprintf(verboseOut, format, args...)
 }
 

@@ -126,12 +126,12 @@ EPUB assembly (`epub.go`) is separate from sanitization.
   `TestSplitWords_Unicode`, and `BenchmarkSplitWords`.
 
 - **Verbose mode (`-v`)**: Silent by default (only errors on stderr).
-  With `-v`, simple summary lines on stderr: `Downloading N articles`,
-  `Fetching N images`, `Optimizing N images`, `Building epub at file`.
-  Replaced the earlier emoji/spinner progress system with plain ASCII
-  output. `logOut` and `verboseOut` both default to `io.Discard`;
-  `-v` enables both on stderr. Covered by `TestVerbose_*` and
-  `TestShortURL*`.
+  With `-v`, three summary lines on stderr:
+  `Fetching N URLs`, `Fetching, optimizing and embedding X images`,
+  `Building epub at file`. Image count is aggregated across all articles
+  after all fetches complete. `logOut` (detailed per-URL/per-image output)
+  stays suppressed under `-v`; reserved for future `-vv`. Covered by
+  `TestVerbose_*` and `TestShortURL*`.
 
 ## APPROVED
 

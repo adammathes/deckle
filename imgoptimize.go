@@ -244,7 +244,6 @@ func fetchAndEmbed(html []byte, concurrency int) []byte {
 	if len(matches) == 0 {
 		return html
 	}
-	vprintf("Fetching %d images\n", len(matches))
 
 	// Fetch all images concurrently
 	type fetchResult struct {
@@ -465,9 +464,7 @@ func processArticleImages(html []byte, opts optimizeOpts, concurrency int) []byt
 
 	// Optimize standalone <img src="data:..."> (not inside <picture>)
 	nImages := len(dataURIRe.FindAllIndex(html, -1))
-	if nImages > 0 {
-		vprintf("Optimizing %d images\n", nImages)
-	}
+	totalImages.Add(int64(nImages))
 	html = dataURIRe.ReplaceAllFunc(html, func(match []byte) []byte {
 		parts := dataURIRe.FindSubmatch(match)
 		if parts == nil {
