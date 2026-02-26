@@ -41,6 +41,7 @@ func TestHTMLOutput_CompleteDocument(t *testing.T) {
 	cfg := cliConfig{
 		opts:      optimizeOpts{maxWidth: 800, quality: 60},
 		output:    outFile,
+		format:    "html",
 		timeout:   5 * time.Second,
 		userAgent: "test-agent",
 		args:      []string{srv.URL},

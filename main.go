@@ -1,16 +1,9 @@
 // deckle: Fetch URLs and produce clean HTML, Markdown, or epub for e-readers.
 //
-// Single article mode:
-//
-//	deckle [options] <URL>
-//
-// Markdown mode (one or more articles):
-//
-//	deckle [options] -markdown <URL|file.txt> [<URL|file.txt>...]
-//
-// Epub mode (multiple articles):
-//
-//	deckle [options] -epub -o output.epub <URL|file> [<URL|file>...]
+//	deckle [options] <URL> [<URL>...]
+//	deckle [options] -i urls.txt
+//	cat urls.txt | deckle [options]
+//	deckle [options] -format epub -o output.epub <URL> [<URL>...]
 package main
 
 import (
@@ -19,6 +12,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -75,8 +69,14 @@ func readURLFile(path string) ([]string, error) {
 	}
 	defer f.Close()
 
+	return readURLLines(f)
+}
+
+// readURLLines reads URLs from a reader, one per line, skipping blanks and
+// lines starting with #.
+func readURLLines(r io.Reader) ([]string, error) {
 	var urls []string
-	scanner := bufio.NewScanner(f)
+	scanner := bufio.NewScanner(r)
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
 		if line == "" || strings.HasPrefix(line, "#") {
@@ -108,6 +108,43 @@ func collectURLs(args []string) (urls []string, txtFilename string, err error) {
 			urls = append(urls, arg)
 		}
 	}
+	return urls, txtFilename, nil
+}
+
+// collectAllURLs gathers URLs from all sources: -i file, positional args,
+// and stdin (when piped).
+func collectAllURLs(cfg cliConfig) (urls []string, txtFilename string, err error) {
+	// From -i flag
+	if cfg.inputFile != "" {
+		fileURLs, ferr := readURLFile(cfg.inputFile)
+		if ferr != nil {
+			return nil, "", fmt.Errorf("reading %s: %w", cfg.inputFile, ferr)
+		}
+		urls = append(urls, fileURLs...)
+		name := filepath.Base(cfg.inputFile)
+		ext := filepath.Ext(name)
+		txtFilename = strings.TrimSuffix(name, ext)
+	}
+
+	// From positional args (URLs and .txt files)
+	argURLs, argTxt, aerr := collectURLs(cfg.args)
+	if aerr != nil {
+		return nil, "", aerr
+	}
+	urls = append(urls, argURLs...)
+	if txtFilename == "" && argTxt != "" {
+		txtFilename = argTxt
+	}
+
+	// From stdin (when piped)
+	if cfg.stdinReader != nil {
+		stdinURLs, serr := readURLLines(cfg.stdinReader)
+		if serr != nil {
+			return nil, "", fmt.Errorf("reading stdin: %w", serr)
+		}
+		urls = append(urls, stdinURLs...)
+	}
+
 	return urls, txtFilename, nil
 }
 
@@ -158,6 +195,28 @@ func fetchMultipleArticles(urls []string, cfg cliConfig) []epubArticle {
 	return articles
 }
 
+// articlesToHTML concatenates a slice of processed articles into a single
+// HTML document. Articles are separated by a horizontal rule.
+func articlesToHTML(articles []epubArticle) (string, error) {
+	if len(articles) == 0 {
+		return "", fmt.Errorf("no articles to render")
+	}
+
+	var parts []string
+	for _, a := range articles {
+		body := extractBodyContent(a.HTML)
+		parts = append(parts, body)
+	}
+
+	combined := strings.Join(parts, "\n<hr>\n")
+
+	title := articles[0].Title
+	if len(articles) > 1 {
+		title += " & more"
+	}
+	return renderFullHTML(combined, title, sourceInfo{}), nil
+}
+
 // writeOutput writes content to a file, or stdout if path is empty.
 func writeOutput(path, content string) error {
 	if path != "" {
@@ -179,136 +238,153 @@ type cliConfig struct {
 	titleOverride string
 	timeout       time.Duration
 	userAgent     string
-	epubMode      bool
-	markdownMode  bool
+	format        string    // "html", "markdown", or "epub"
 	coverStyle    string
 	concurrency   int
-	args          []string
+	inputFile     string    // -i flag: read URLs from this file
+	stdinReader   io.Reader // if non-nil, read URLs from this reader (stdin pipe)
+	args          []string  // positional arguments (URLs or .txt files)
 }
 
 // run executes the main application logic, returning any error.
 func run(cfg cliConfig) error {
-	if cfg.markdownMode && cfg.epubMode {
-		return fmt.Errorf("-markdown and -epub are mutually exclusive")
+	if cfg.format == "" {
+		cfg.format = "markdown"
 	}
 	if cfg.concurrency < 1 {
 		cfg.concurrency = 5
 	}
 
-	if cfg.epubMode {
-		if cfg.output == "" {
-			return fmt.Errorf("-epub requires -o output.epub")
-		}
-		if len(cfg.args) < 1 {
-			return fmt.Errorf("epub mode requires at least one URL or file argument")
-		}
-
-		urls, txtFilename, err := collectURLs(cfg.args)
-		if err != nil {
-			return err
-		}
-		if len(urls) == 0 {
-			return fmt.Errorf("no URLs provided")
-		}
-
-		totalImages.Store(0)
-		vprintf("Fetching %d URLs\n", len(urls))
-
-		articles := fetchMultipleArticles(urls, cfg)
-		if len(articles) == 0 {
-			return fmt.Errorf("no articles converted")
-		}
-		if n := totalImages.Load(); n > 0 {
-			vprintf("Fetching, optimizing and embedding %d images\n", n)
-		}
-
-		// Derive book title: -title flag > .txt filename > first article title > output filename
-		bookTitle := cfg.titleOverride
-		if bookTitle == "" && txtFilename != "" {
-			bookTitle = txtFilename
-		}
-		if bookTitle == "" {
-			if len(articles) > 1 {
-				bookTitle = articles[0].Title + " & more"
-			} else {
-				bookTitle = articles[0].Title
-			}
-		}
-		if bookTitle == "" {
-			bookTitle = strings.TrimSuffix(cfg.output, ".epub")
-			if idx := strings.LastIndex(bookTitle, "/"); idx >= 0 {
-				bookTitle = bookTitle[idx+1:]
-			}
-		}
-
-		vprintf("Building epub at %s\n", cfg.output)
-		if err := buildEpub(articles, bookTitle, cfg.output, cfg.coverStyle); err != nil {
-			return fmt.Errorf("building epub: %w", err)
-		}
-		return nil
+	switch cfg.format {
+	case "html", "markdown", "epub":
+	default:
+		return fmt.Errorf("unknown format %q (must be html, markdown, or epub)", cfg.format)
 	}
 
-	if cfg.markdownMode {
-		if len(cfg.args) < 1 {
-			return fmt.Errorf("markdown mode requires at least one URL or file argument")
-		}
+	if cfg.format == "epub" && cfg.output == "" {
+		return fmt.Errorf("epub format requires -o output.epub")
+	}
 
-		urls, _, err := collectURLs(cfg.args)
+	urls, txtFilename, err := collectAllURLs(cfg)
+	if err != nil {
+		return err
+	}
+	if len(urls) == 0 {
+		return fmt.Errorf("no URLs provided")
+	}
+
+	switch cfg.format {
+	case "epub":
+		return runEpub(cfg, urls, txtFilename)
+	case "markdown":
+		return runMarkdown(cfg, urls)
+	case "html":
+		return runHTML(cfg, urls)
+	}
+	return nil
+}
+
+func runEpub(cfg cliConfig, urls []string, txtFilename string) error {
+	totalImages.Store(0)
+	vprintf("Fetching %d URLs\n", len(urls))
+
+	articles := fetchMultipleArticles(urls, cfg)
+	if len(articles) == 0 {
+		return fmt.Errorf("no articles converted")
+	}
+	if n := totalImages.Load(); n > 0 {
+		vprintf("Fetching, optimizing and embedding %d images\n", n)
+	}
+
+	// Derive book title: -title flag > .txt filename > first article title > output filename
+	bookTitle := cfg.titleOverride
+	if bookTitle == "" && txtFilename != "" {
+		bookTitle = txtFilename
+	}
+	if bookTitle == "" {
+		if len(articles) > 1 {
+			bookTitle = articles[0].Title + " & more"
+		} else {
+			bookTitle = articles[0].Title
+		}
+	}
+	if bookTitle == "" {
+		bookTitle = strings.TrimSuffix(cfg.output, ".epub")
+		if idx := strings.LastIndex(bookTitle, "/"); idx >= 0 {
+			bookTitle = bookTitle[idx+1:]
+		}
+	}
+
+	vprintf("Building epub at %s\n", cfg.output)
+	if err := buildEpub(articles, bookTitle, cfg.output, cfg.coverStyle); err != nil {
+		return fmt.Errorf("building epub: %w", err)
+	}
+	return nil
+}
+
+func runMarkdown(cfg cliConfig, urls []string) error {
+	// Markdown output uses original image URLs, not embedded data URIs,
+	// so there is no point downloading images.
+	mdOpts := cfg.opts
+	mdOpts.skipImageFetch = true
+
+	if len(urls) == 1 {
+		vprintf("Fetching 1 URL\n")
+		final, _, _, err := processURL(urls[0], mdOpts, cfg.timeout, cfg.userAgent, cfg.titleOverride, cfg.concurrency)
 		if err != nil {
 			return err
 		}
-		if len(urls) == 0 {
-			return fmt.Errorf("no URLs provided")
-		}
-
-		// Markdown output uses original image URLs, not embedded data URIs,
-		// so there is no point downloading images.
-		mdOpts := cfg.opts
-		mdOpts.skipImageFetch = true
-
-		if len(urls) == 1 {
-			vprintf("Fetching 1 URL\n")
-			final, _, _, err := processURL(urls[0], mdOpts, cfg.timeout, cfg.userAgent, cfg.titleOverride, cfg.concurrency)
-			if err != nil {
-				return err
-			}
-			md, err := convertArticleToMarkdown(final)
-			if err != nil {
-				return err
-			}
-			return writeOutput(cfg.output, md+"\n")
-		}
-
-		// Multiple URLs: fetch in parallel, concatenate with separators.
-		mdCfg := cfg
-		mdCfg.opts = mdOpts
-		vprintf("Fetching %d URLs\n", len(urls))
-		articles := fetchMultipleArticles(urls, mdCfg)
-		if len(articles) == 0 {
-			return fmt.Errorf("no articles converted")
-		}
-		md, err := articlesToMarkdown(articles)
+		md, err := convertArticleToMarkdown(final)
 		if err != nil {
 			return err
 		}
 		return writeOutput(cfg.output, md+"\n")
 	}
 
-	// Single URL HTML mode
-	if len(cfg.args) != 1 {
-		return fmt.Errorf("single URL mode requires exactly one URL argument")
+	// Multiple URLs: fetch in parallel, concatenate with separators.
+	mdCfg := cfg
+	mdCfg.opts = mdOpts
+	vprintf("Fetching %d URLs\n", len(urls))
+	articles := fetchMultipleArticles(urls, mdCfg)
+	if len(articles) == 0 {
+		return fmt.Errorf("no articles converted")
 	}
-
-	totalImages.Store(0)
-	vprintf("Fetching 1 URL\n")
-	final, _, _, err := processURL(cfg.args[0], cfg.opts, cfg.timeout, cfg.userAgent, cfg.titleOverride, cfg.concurrency)
+	md, err := articlesToMarkdown(articles)
 	if err != nil {
 		return err
+	}
+	return writeOutput(cfg.output, md+"\n")
+}
+
+func runHTML(cfg cliConfig, urls []string) error {
+	totalImages.Store(0)
+
+	if len(urls) == 1 {
+		vprintf("Fetching 1 URL\n")
+		final, _, _, err := processURL(urls[0], cfg.opts, cfg.timeout, cfg.userAgent, cfg.titleOverride, cfg.concurrency)
+		if err != nil {
+			return err
+		}
+		if n := totalImages.Load(); n > 0 {
+			vprintf("Fetching, optimizing and embedding %d images\n", n)
+		}
+		return writeOutput(cfg.output, final)
+	}
+
+	// Multiple URLs: fetch in parallel, concatenate with separators.
+	vprintf("Fetching %d URLs\n", len(urls))
+	articles := fetchMultipleArticles(urls, cfg)
+	if len(articles) == 0 {
+		return fmt.Errorf("no articles converted")
 	}
 	if n := totalImages.Load(); n > 0 {
 		vprintf("Fetching, optimizing and embedding %d images\n", n)
 	}
-	return writeOutput(cfg.output, final)
+	html, err := articlesToHTML(articles)
+	if err != nil {
+		return err
+	}
+	return writeOutput(cfg.output, html)
 }
 
 func main() {
@@ -319,17 +395,23 @@ func main() {
 	titleOverride := flag.String("title", "", "Override article/book title")
 	timeout := flag.Duration("timeout", 30*time.Second, "HTTP fetch timeout")
 	userAgent := flag.String("user-agent", defaultUA, "HTTP User-Agent header")
-	epubMode := flag.Bool("epub", false, "Generate epub (requires -o, accepts multiple URLs or a .txt file)")
-	markdownMode := flag.Bool("markdown", false, "Convert to Markdown (data URI images become alt-text placeholders)")
+	outputFmt := flag.String("format", "markdown", "Output format: html, markdown, or epub")
+	inputFile := flag.String("i", "", "Input file containing URLs (one per line, # comments ignored)")
 	coverStyle := flag.String("cover", "collage", "Cover style: 'collage', 'pattern', or 'none'")
 	concurrency := flag.Int("concurrency", 5, "Max concurrent downloads for articles and images")
 	maxRespSize := flag.Int64("max-response-size", 128*1024*1024, "Maximum allowed HTTP response size in bytes (0 for unlimited)")
 	proxy := flag.String("proxy", "", "HTTP proxy URL (falls back to standard TLS, e.g. http://proxy.example.com:8080)")
 	verbose := flag.Bool("v", false, "Verbose output (show progress on stderr)")
+
+	// Deprecated flags for backward compatibility
+	epubMode := flag.Bool("epub", false, "Deprecated: use -format epub")
+	markdownMode := flag.Bool("markdown", false, "Deprecated: use -format markdown")
+
 	flag.Usage = func() {
-		fmt.Fprintf(os.Stderr, "Usage: deckle [options] <URL>\n")
-		fmt.Fprintf(os.Stderr, "       deckle [options] -markdown <URL|file.txt> [...]\n")
-		fmt.Fprintf(os.Stderr, "       deckle [options] -epub -o out.epub <URL|file.txt> [...]\n\n")
+		fmt.Fprintf(os.Stderr, "Usage: deckle [options] <URL> [<URL>...]\n")
+		fmt.Fprintf(os.Stderr, "       deckle [options] -i urls.txt\n")
+		fmt.Fprintf(os.Stderr, "       cat urls.txt | deckle [options]\n")
+		fmt.Fprintf(os.Stderr, "       deckle [options] -format epub -o out.epub <URL> [...]\n\n")
 		fmt.Fprintf(os.Stderr, "Fetch URLs and produce clean HTML, Markdown, or epub for e-readers.\n\n")
 		flag.PrintDefaults()
 	}
@@ -342,9 +424,23 @@ func main() {
 	maxResponseBytes = *maxRespSize
 	fetchProxyURL = *proxy
 
+	// Backward compat: -epub and -markdown flags override -format
+	fmtVal := *outputFmt
+	if *epubMode {
+		fmtVal = "epub"
+	} else if *markdownMode {
+		fmtVal = "markdown"
+	}
+
 	conc := *concurrency
 	if conc < 1 {
 		conc = 1
+	}
+
+	// Check if stdin is a pipe
+	var stdinReader io.Reader
+	if info, err := os.Stdin.Stat(); err == nil && info.Mode()&os.ModeCharDevice == 0 {
+		stdinReader = os.Stdin
 	}
 
 	cfg := cliConfig{
@@ -357,10 +453,11 @@ func main() {
 		titleOverride: *titleOverride,
 		timeout:       *timeout,
 		userAgent:     *userAgent,
-		epubMode:      *epubMode,
-		markdownMode:  *markdownMode,
+		format:        fmtVal,
 		coverStyle:    *coverStyle,
 		concurrency:   conc,
+		inputFile:     *inputFile,
+		stdinReader:   stdinReader,
 		args:          flag.Args(),
 	}
 

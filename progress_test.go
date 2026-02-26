@@ -101,6 +101,7 @@ content for readability to extract it as the main article. More text here.</p>
 	cfg := cliConfig{
 		opts:      optimizeOpts{maxWidth: 800, quality: 60},
 		output:    outFile,
+		format:    "html",
 		timeout:   5 * time.Second,
 		userAgent: "test-agent",
 		args:      []string{srv.URL},
@@ -153,9 +154,9 @@ func TestVerbose_EpubMode_MultipleArticles(t *testing.T) {
 	cfg := cliConfig{
 		opts:      optimizeOpts{maxWidth: 800, quality: 60},
 		output:    outFile,
+		format:    "epub",
 		timeout:   5 * time.Second,
 		userAgent: "test-agent",
-		epubMode:  true,
 		args:      []string{srv.URL + "/1", srv.URL + "/2", srv.URL + "/3"},
 	}
 
@@ -198,6 +199,7 @@ readability to extract it as the main article. More filler text here.</p>
 	cfg := cliConfig{
 		opts:      optimizeOpts{maxWidth: 800, quality: 60},
 		output:    outFile,
+		format:    "html",
 		timeout:   5 * time.Second,
 		userAgent: "test-agent",
 		args:      []string{srv.URL},
@@ -255,6 +257,7 @@ readability to identify this as the main content region of the page.</p>
 	cfg := cliConfig{
 		opts:      optimizeOpts{maxWidth: 800, quality: 60},
 		output:    outFile,
+		format:    "html",
 		timeout:   5 * time.Second,
 		userAgent: "test-agent",
 		args:      []string{srv.URL},
@@ -292,12 +295,12 @@ the content threshold for the readability algorithm.</p>
 
 	outFile := filepath.Join(t.TempDir(), "output.md")
 	cfg := cliConfig{
-		opts:         optimizeOpts{maxWidth: 800, quality: 60},
-		output:       outFile,
-		timeout:      5 * time.Second,
-		userAgent:    "test-agent",
-		markdownMode: true,
-		args:         []string{srv.URL},
+		opts:      optimizeOpts{maxWidth: 800, quality: 60},
+		output:    outFile,
+		format:    "markdown",
+		timeout:   5 * time.Second,
+		userAgent: "test-agent",
+		args:      []string{srv.URL},
 	}
 
 	output := withVerboseCapture(func() {
@@ -334,12 +337,12 @@ readability to extract as the main article content region.</p>
 
 	outFile := filepath.Join(t.TempDir(), "multi.md")
 	cfg := cliConfig{
-		opts:         optimizeOpts{maxWidth: 800, quality: 60},
-		output:       outFile,
-		timeout:      5 * time.Second,
-		userAgent:    "test-agent",
-		markdownMode: true,
-		args:         []string{srv.URL + "/a", srv.URL + "/b"},
+		opts:      optimizeOpts{maxWidth: 800, quality: 60},
+		output:    outFile,
+		format:    "markdown",
+		timeout:   5 * time.Second,
+		userAgent: "test-agent",
+		args:      []string{srv.URL + "/a", srv.URL + "/b"},
 	}
 
 	output := withVerboseCapture(func() {
@@ -389,6 +392,7 @@ it as the main article. More text here for the algorithm.</p>
 	cfg := cliConfig{
 		opts:      optimizeOpts{maxWidth: 800, quality: 60},
 		output:    outFile,
+		format:    "html",
 		timeout:   5 * time.Second,
 		userAgent: "test-agent",
 		args:      []string{srv.URL},

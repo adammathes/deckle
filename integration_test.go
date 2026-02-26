@@ -426,9 +426,9 @@ func TestIntegration_MultiArticleEpub(t *testing.T) {
 	cfg := cliConfig{
 		opts:      optimizeOpts{maxWidth: 800, quality: 60, grayscale: true},
 		output:    outFile,
+		format:    "epub",
 		timeout:   10 * time.Second,
 		userAgent: "test-agent",
-		epubMode:  true,
 		args:      []string{urlFile},
 	}
 
@@ -673,9 +673,9 @@ density for the readability algorithm to work properly.</p>
 	cfg := cliConfig{
 		opts:      optimizeOpts{maxWidth: 800, quality: 60},
 		output:    outFile,
+		format:    "epub",
 		timeout:   10 * time.Second,
 		userAgent: "test-agent",
-		epubMode:  true,
 		args:      []string{srv.URL},
 	}
 
@@ -1030,9 +1030,9 @@ Additional filler text to ensure content density threshold is met.</p>
 	cfg := cliConfig{
 		opts:        optimizeOpts{maxWidth: 800, quality: 60},
 		output:      outFile,
+		format:      "epub",
 		timeout:     10 * time.Second,
 		userAgent:   "test-agent",
-		epubMode:    true,
 		concurrency: 5,
 		args: []string{
 			srv.URL + "/a1",
@@ -1149,12 +1149,13 @@ func TestConcurrencyFlag(t *testing.T) {
 	// Test that run() uses the concurrency setting
 	cfg := cliConfig{
 		opts:        optimizeOpts{maxWidth: 800, quality: 60},
+		format:      "html",
 		concurrency: 0, // zero should be corrected to default
 	}
 	// run will set concurrency to 5 for zero-value
 	// Just verify it doesn't panic with concurrency=0
 	err := run(cfg)
-	// Expected error: no args provided in single mode
+	// Expected error: no args provided
 	if err == nil {
 		t.Error("expected error (no args), but got nil")
 	}

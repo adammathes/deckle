@@ -330,6 +330,7 @@ ensure the content threshold is met by the readability algorithm.</p>
 	cfg := cliConfig{
 		opts:      optimizeOpts{maxWidth: 800, quality: 60},
 		output:    outFile,
+		format:    "html",
 		timeout:   5 * time.Second,
 		userAgent: "test-agent",
 		args:      []string{srv.URL},
@@ -369,6 +370,7 @@ content for readability to extract it as the main article properly.</p>
 	// No output file - goes to stdout
 	cfg := cliConfig{
 		opts:      optimizeOpts{maxWidth: 800, quality: 60},
+		format:    "html",
 		timeout:   5 * time.Second,
 		userAgent: "test-agent",
 		args:      []string{srv.URL},
@@ -402,9 +404,9 @@ readability to extract it as the main article content. More text here.</p>
 	cfg := cliConfig{
 		opts:      optimizeOpts{maxWidth: 800, quality: 60},
 		output:    outFile,
+		format:    "epub",
 		timeout:   5 * time.Second,
 		userAgent: "test-agent",
-		epubMode:  true,
 		args:      []string{srv.URL},
 	}
 
@@ -447,9 +449,9 @@ for readability to work with. More padding text for the algorithm.</p>
 	cfg := cliConfig{
 		opts:      optimizeOpts{maxWidth: 800, quality: 60},
 		output:    outFile,
+		format:    "epub",
 		timeout:   5 * time.Second,
 		userAgent: "test-agent",
-		epubMode:  true,
 		args:      []string{urlFile},
 	}
 
@@ -495,9 +497,9 @@ func TestRun_EpubMode_MultipleArticles(t *testing.T) {
 		opts:          optimizeOpts{maxWidth: 800, quality: 60},
 		output:        outFile,
 		titleOverride: "Multi Book",
+		format:        "epub",
 		timeout:       5 * time.Second,
 		userAgent:     "test-agent",
-		epubMode:      true,
 		args:          []string{srv.URL + "/1", srv.URL + "/2"},
 	}
 
@@ -509,9 +511,9 @@ func TestRun_EpubMode_MultipleArticles(t *testing.T) {
 
 func TestRun_EpubMode_NoOutput(t *testing.T) {
 	cfg := cliConfig{
-		opts:     optimizeOpts{maxWidth: 800, quality: 60},
-		epubMode: true,
-		args:     []string{"https://example.com"},
+		opts:   optimizeOpts{maxWidth: 800, quality: 60},
+		format: "epub",
+		args:   []string{"https://example.com"},
 	}
 	err := run(cfg)
 	if err == nil {
@@ -521,10 +523,10 @@ func TestRun_EpubMode_NoOutput(t *testing.T) {
 
 func TestRun_EpubMode_NoArgs(t *testing.T) {
 	cfg := cliConfig{
-		opts:     optimizeOpts{maxWidth: 800, quality: 60},
-		output:   "out.epub",
-		epubMode: true,
-		args:     []string{},
+		opts:   optimizeOpts{maxWidth: 800, quality: 60},
+		output: "out.epub",
+		format: "epub",
+		args:   []string{},
 	}
 	err := run(cfg)
 	if err == nil {
@@ -532,25 +534,46 @@ func TestRun_EpubMode_NoArgs(t *testing.T) {
 	}
 }
 
-func TestRun_SingleMode_NoArgs(t *testing.T) {
+func TestRun_NoArgs(t *testing.T) {
+	cfg := cliConfig{
+		opts:   optimizeOpts{maxWidth: 800, quality: 60},
+		format: "html",
+		args:   []string{},
+	}
+	err := run(cfg)
+	if err == nil {
+		t.Error("expected error when no args provided")
+	}
+}
+
+func TestRun_UnknownFormat(t *testing.T) {
+	cfg := cliConfig{
+		opts:   optimizeOpts{maxWidth: 800, quality: 60},
+		format: "pdf",
+		args:   []string{"https://example.com"},
+	}
+	err := run(cfg)
+	if err == nil {
+		t.Error("expected error for unknown format")
+	}
+	if !strings.Contains(err.Error(), "unknown format") {
+		t.Errorf("expected 'unknown format' error, got: %v", err)
+	}
+}
+
+func TestRun_DefaultFormatIsMarkdown(t *testing.T) {
+	// When no format is set, default should be markdown
 	cfg := cliConfig{
 		opts: optimizeOpts{maxWidth: 800, quality: 60},
 		args: []string{},
 	}
 	err := run(cfg)
+	// Will fail because no URLs, but the error should be about URLs, not format
 	if err == nil {
-		t.Error("expected error when single mode has no args")
+		t.Error("expected error")
 	}
-}
-
-func TestRun_SingleMode_TooManyArgs(t *testing.T) {
-	cfg := cliConfig{
-		opts: optimizeOpts{maxWidth: 800, quality: 60},
-		args: []string{"url1", "url2"},
-	}
-	err := run(cfg)
-	if err == nil {
-		t.Error("expected error when single mode has too many args")
+	if strings.Contains(err.Error(), "format") {
+		t.Errorf("default format should be valid, got: %v", err)
 	}
 }
 
@@ -600,6 +623,472 @@ func TestWriteOutput_Stdout(t *testing.T) {
 	n, _ := r.Read(buf)
 	if string(buf[:n]) != "test output" {
 		t.Errorf("got %q, want %q", string(buf[:n]), "test output")
+	}
+}
+
+// ---------- regression tests for CLI coherence ----------
+
+// TestRun_InputFileFlag verifies -i reads URLs from a file.
+func TestRun_InputFileFlag(t *testing.T) {
+	pageHTML := makeArticleHTML("Input File Test", "Content from input file test.")
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.Write([]byte(pageHTML))
+	}))
+	defer srv.Close()
+
+	tmpDir := t.TempDir()
+	urlFile := filepath.Join(tmpDir, "urls.txt")
+	os.WriteFile(urlFile, []byte(srv.URL+"\n"), 0644)
+	outFile := filepath.Join(tmpDir, "out.md")
+
+	cfg := cliConfig{
+		opts:      optimizeOpts{maxWidth: 800, quality: 60},
+		output:    outFile,
+		format:    "markdown",
+		timeout:   5 * time.Second,
+		userAgent: "test-agent",
+		inputFile: urlFile,
+	}
+	if err := run(cfg); err != nil {
+		t.Fatalf("run() error: %v", err)
+	}
+
+	data, err := os.ReadFile(outFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), "Input File Test") {
+		t.Error("expected article title from -i file")
+	}
+}
+
+// TestRun_InputFileAndArgs verifies -i file and positional args are combined.
+func TestRun_InputFileAndArgs(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		var title string
+		switch r.URL.Path {
+		case "/from-file":
+			title = "Article From File"
+		case "/from-arg":
+			title = "Article From Arg"
+		default:
+			w.WriteHeader(404)
+			return
+		}
+		w.Write([]byte(makeArticleHTML(title, "Content of "+title+".")))
+	}))
+	defer srv.Close()
+
+	tmpDir := t.TempDir()
+	urlFile := filepath.Join(tmpDir, "urls.txt")
+	os.WriteFile(urlFile, []byte(srv.URL+"/from-file\n"), 0644)
+	outFile := filepath.Join(tmpDir, "combined.md")
+
+	cfg := cliConfig{
+		opts:      optimizeOpts{maxWidth: 800, quality: 60},
+		output:    outFile,
+		format:    "markdown",
+		timeout:   5 * time.Second,
+		userAgent: "test-agent",
+		inputFile: urlFile,
+		args:      []string{srv.URL + "/from-arg"},
+	}
+	if err := run(cfg); err != nil {
+		t.Fatalf("run() error: %v", err)
+	}
+
+	data, err := os.ReadFile(outFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	md := string(data)
+	if !strings.Contains(md, "Article From File") {
+		t.Error("expected article from -i file")
+	}
+	if !strings.Contains(md, "Article From Arg") {
+		t.Error("expected article from positional arg")
+	}
+}
+
+// TestRun_StdinPipe verifies URLs can be piped via stdin.
+func TestRun_StdinPipe(t *testing.T) {
+	pageHTML := makeArticleHTML("Stdin Pipe Test", "Content piped via stdin.")
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.Write([]byte(pageHTML))
+	}))
+	defer srv.Close()
+
+	outFile := filepath.Join(t.TempDir(), "stdin.md")
+	stdinContent := "# comment line\n" + srv.URL + "\n\n"
+
+	cfg := cliConfig{
+		opts:        optimizeOpts{maxWidth: 800, quality: 60},
+		output:      outFile,
+		format:      "markdown",
+		timeout:     5 * time.Second,
+		userAgent:   "test-agent",
+		stdinReader: strings.NewReader(stdinContent),
+	}
+	if err := run(cfg); err != nil {
+		t.Fatalf("run() error: %v", err)
+	}
+
+	data, err := os.ReadFile(outFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), "Stdin Pipe Test") {
+		t.Error("expected article title from stdin pipe")
+	}
+}
+
+// TestRun_StdinSkipsComments verifies that # lines in stdin are ignored.
+func TestRun_StdinSkipsComments(t *testing.T) {
+	pageHTML := makeArticleHTML("Valid URL", "Only valid URLs should be fetched.")
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.Write([]byte(pageHTML))
+	}))
+	defer srv.Close()
+
+	outFile := filepath.Join(t.TempDir(), "comment.md")
+	stdinContent := "# This is a comment\n# Another comment\n" + srv.URL + "\n# trailing comment\n"
+
+	cfg := cliConfig{
+		opts:        optimizeOpts{maxWidth: 800, quality: 60},
+		output:      outFile,
+		format:      "markdown",
+		timeout:     5 * time.Second,
+		userAgent:   "test-agent",
+		stdinReader: strings.NewReader(stdinContent),
+	}
+	if err := run(cfg); err != nil {
+		t.Fatalf("run() error: %v", err)
+	}
+
+	data, err := os.ReadFile(outFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), "Valid URL") {
+		t.Error("expected content from valid URL in stdin")
+	}
+}
+
+// TestRun_MultiURLHTML verifies HTML format concatenates multiple articles.
+func TestRun_MultiURLHTML(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		var title string
+		switch r.URL.Path {
+		case "/a":
+			title = "First HTML Article"
+		case "/b":
+			title = "Second HTML Article"
+		default:
+			w.WriteHeader(404)
+			return
+		}
+		w.Write([]byte(makeArticleHTML(title, "Content of "+title+".")))
+	}))
+	defer srv.Close()
+
+	outFile := filepath.Join(t.TempDir(), "multi.html")
+	cfg := cliConfig{
+		opts:      optimizeOpts{maxWidth: 800, quality: 60},
+		output:    outFile,
+		format:    "html",
+		timeout:   5 * time.Second,
+		userAgent: "test-agent",
+		args:      []string{srv.URL + "/a", srv.URL + "/b"},
+	}
+	if err := run(cfg); err != nil {
+		t.Fatalf("run() error: %v", err)
+	}
+
+	data, err := os.ReadFile(outFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	html := string(data)
+	if !strings.Contains(html, "First HTML Article") {
+		t.Error("expected first article in multi-URL HTML output")
+	}
+	if !strings.Contains(html, "Second HTML Article") {
+		t.Error("expected second article in multi-URL HTML output")
+	}
+	if !strings.Contains(html, "<hr>") {
+		t.Error("expected <hr> separator between articles")
+	}
+	if !strings.Contains(html, "<!DOCTYPE html>") {
+		t.Error("expected complete HTML document")
+	}
+}
+
+// TestRun_FormatEpubWithInputFile verifies -format epub with -i file.
+func TestRun_FormatEpubWithInputFile(t *testing.T) {
+	pageHTML := makeArticleHTML("Epub Input Test", "Content for epub via -i flag.")
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.Write([]byte(pageHTML))
+	}))
+	defer srv.Close()
+
+	tmpDir := t.TempDir()
+	urlFile := filepath.Join(tmpDir, "reading-list.txt")
+	os.WriteFile(urlFile, []byte(srv.URL+"\n"), 0644)
+	outFile := filepath.Join(tmpDir, "out.epub")
+
+	cfg := cliConfig{
+		opts:      optimizeOpts{maxWidth: 800, quality: 60},
+		output:    outFile,
+		format:    "epub",
+		timeout:   5 * time.Second,
+		userAgent: "test-agent",
+		inputFile: urlFile,
+	}
+	if err := run(cfg); err != nil {
+		t.Fatalf("run() error: %v", err)
+	}
+
+	info, err := os.Stat(outFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Size() < 100 {
+		t.Error("epub file too small")
+	}
+}
+
+// TestRun_InputFileNotFound verifies error for missing -i file.
+func TestRun_InputFileNotFound(t *testing.T) {
+	cfg := cliConfig{
+		opts:      optimizeOpts{maxWidth: 800, quality: 60},
+		format:    "markdown",
+		inputFile: "/nonexistent/urls.txt",
+	}
+	err := run(cfg)
+	if err == nil {
+		t.Error("expected error for missing input file")
+	}
+}
+
+// TestReadURLLines verifies the shared line reader.
+func TestReadURLLines(t *testing.T) {
+	input := "https://example.com/1\n# comment\n\nhttps://example.com/2\n  \nhttps://example.com/3\n"
+	urls, err := readURLLines(strings.NewReader(input))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(urls) != 3 {
+		t.Errorf("expected 3 URLs, got %d", len(urls))
+	}
+	expected := []string{
+		"https://example.com/1",
+		"https://example.com/2",
+		"https://example.com/3",
+	}
+	for i, u := range urls {
+		if u != expected[i] {
+			t.Errorf("urls[%d] = %q, want %q", i, u, expected[i])
+		}
+	}
+}
+
+// TestReadURLLines_Empty verifies empty input returns no URLs.
+func TestReadURLLines_Empty(t *testing.T) {
+	urls, err := readURLLines(strings.NewReader("# only comments\n\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(urls) != 0 {
+		t.Errorf("expected 0 URLs, got %d", len(urls))
+	}
+}
+
+// TestCollectAllURLs_CombinesSources verifies URLs from -i, args, and stdin.
+func TestCollectAllURLs_CombinesSources(t *testing.T) {
+	tmpDir := t.TempDir()
+	urlFile := filepath.Join(tmpDir, "input.txt")
+	os.WriteFile(urlFile, []byte("https://from-file.com\n"), 0644)
+
+	cfg := cliConfig{
+		inputFile:   urlFile,
+		args:        []string{"https://from-arg.com"},
+		stdinReader: strings.NewReader("https://from-stdin.com\n"),
+	}
+	urls, txtFilename, err := collectAllURLs(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(urls) != 3 {
+		t.Errorf("expected 3 URLs, got %d: %v", len(urls), urls)
+	}
+	if txtFilename != "input" {
+		t.Errorf("txtFilename = %q, want %q", txtFilename, "input")
+	}
+	// Verify order: -i first, then args, then stdin
+	want := []string{"https://from-file.com", "https://from-arg.com", "https://from-stdin.com"}
+	for i, u := range urls {
+		if u != want[i] {
+			t.Errorf("urls[%d] = %q, want %q", i, u, want[i])
+		}
+	}
+}
+
+// TestCollectAllURLs_NoStdin verifies behavior with no stdin reader.
+func TestCollectAllURLs_NoStdin(t *testing.T) {
+	cfg := cliConfig{
+		args: []string{"https://example.com"},
+	}
+	urls, _, err := collectAllURLs(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(urls) != 1 || urls[0] != "https://example.com" {
+		t.Errorf("unexpected URLs: %v", urls)
+	}
+}
+
+// TestArticlesToHTML verifies HTML concatenation.
+func TestArticlesToHTML(t *testing.T) {
+	articles := []epubArticle{
+		{HTML: `<html><body><h1>First</h1><p>First article.</p></body></html>`, Title: "First"},
+		{HTML: `<html><body><h1>Second</h1><p>Second article.</p></body></html>`, Title: "Second"},
+	}
+	html, err := articlesToHTML(articles)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(html, "First article.") {
+		t.Error("expected first article content")
+	}
+	if !strings.Contains(html, "Second article.") {
+		t.Error("expected second article content")
+	}
+	if !strings.Contains(html, "<hr>") {
+		t.Error("expected <hr> separator")
+	}
+	if !strings.Contains(html, "<!DOCTYPE html>") {
+		t.Error("expected full HTML document wrapper")
+	}
+}
+
+// TestArticlesToHTML_Empty verifies error for empty input.
+func TestArticlesToHTML_Empty(t *testing.T) {
+	_, err := articlesToHTML(nil)
+	if err == nil {
+		t.Error("expected error for empty articles")
+	}
+}
+
+// TestArticlesToHTML_Single verifies single article has no separator.
+func TestArticlesToHTML_Single(t *testing.T) {
+	articles := []epubArticle{
+		{HTML: `<html><body><h1>Solo</h1><p>Single article.</p></body></html>`, Title: "Solo"},
+	}
+	html, err := articlesToHTML(articles)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(html, "<hr>") {
+		t.Error("single article should not have <hr> separator")
+	}
+	if !strings.Contains(html, "Single article.") {
+		t.Error("expected article content")
+	}
+}
+
+// TestRun_FormatHTMLSingleURL verifies -format html with single URL.
+func TestRun_FormatHTMLSingleURL(t *testing.T) {
+	pageHTML := makeArticleHTML("Single HTML Test", "Content for single HTML.")
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.Write([]byte(pageHTML))
+	}))
+	defer srv.Close()
+
+	outFile := filepath.Join(t.TempDir(), "single.html")
+	cfg := cliConfig{
+		opts:      optimizeOpts{maxWidth: 800, quality: 60},
+		output:    outFile,
+		format:    "html",
+		timeout:   5 * time.Second,
+		userAgent: "test-agent",
+		args:      []string{srv.URL},
+	}
+	if err := run(cfg); err != nil {
+		t.Fatalf("run() error: %v", err)
+	}
+
+	data, err := os.ReadFile(outFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), "Single HTML Test") {
+		t.Error("expected article title in HTML output")
+	}
+}
+
+// TestRun_StdinAllSources verifies -i, args, and stdin all combined.
+func TestRun_StdinAllSources(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		title := "Article " + r.URL.Path
+		w.Write([]byte(makeArticleHTML(title, "Content for "+title+".")))
+	}))
+	defer srv.Close()
+
+	tmpDir := t.TempDir()
+	urlFile := filepath.Join(tmpDir, "urls.txt")
+	os.WriteFile(urlFile, []byte(srv.URL+"/from-file\n"), 0644)
+	outFile := filepath.Join(tmpDir, "all.md")
+
+	cfg := cliConfig{
+		opts:        optimizeOpts{maxWidth: 800, quality: 60},
+		output:      outFile,
+		format:      "markdown",
+		timeout:     5 * time.Second,
+		userAgent:   "test-agent",
+		inputFile:   urlFile,
+		args:        []string{srv.URL + "/from-arg"},
+		stdinReader: strings.NewReader(srv.URL + "/from-stdin\n"),
+	}
+	if err := run(cfg); err != nil {
+		t.Fatalf("run() error: %v", err)
+	}
+
+	data, err := os.ReadFile(outFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	md := string(data)
+	if !strings.Contains(md, "/from-file") {
+		t.Error("expected article from -i file")
+	}
+	if !strings.Contains(md, "/from-arg") {
+		t.Error("expected article from positional arg")
+	}
+	if !strings.Contains(md, "/from-stdin") {
+		t.Error("expected article from stdin")
+	}
+}
+
+// TestRun_EpubRequiresOutput verifies epub format requires -o.
+func TestRun_EpubRequiresOutput(t *testing.T) {
+	cfg := cliConfig{
+		format: "epub",
+		args:   []string{"https://example.com"},
+	}
+	err := run(cfg)
+	if err == nil {
+		t.Error("expected error")
+	}
+	if !strings.Contains(err.Error(), "requires -o") {
+		t.Errorf("expected output requirement error, got: %v", err)
 	}
 }
 

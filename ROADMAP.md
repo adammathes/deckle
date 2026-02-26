@@ -6,7 +6,7 @@ Deckle generates valid EPUB 3 output. A stress test with 87 Hacker News
 article pages (February 2025) found 552 epubcheck errors + 1 fatal, all of
 which have been fixed. The EPUB now validates with 0 errors, 0 warnings.
 
-160 tests pass (including fuzz seed corpus), with 85.5% statement coverage.
+247 tests pass (including fuzz seed corpus), with 85.3% statement coverage.
 
 ### Architecture overview
 
@@ -39,7 +39,7 @@ EPUB assembly (`epub.go`) is separate from sanitization.
 | `imgoptimize.go` | ~530 | Image optimization + lazy-load promotion |
 | `imgoptimize_test.go` | ~830 | Image optimization tests |
 | `cover.go` | 370 | Cover image generation |
-| `main.go` | ~310 | CLI + pipeline orchestration |
+| `main.go` | ~380 | CLI + pipeline orchestration |
 | `progress.go` | ~40 | Verbose output (`-v` flag) |
 | `fetch.go` | 233 | HTTP fetching with TLS fingerprinting |
 | `headings.go` | 197 | Title extraction, heading normalization |
@@ -133,18 +133,23 @@ EPUB assembly (`epub.go`) is separate from sanitization.
   stays suppressed under `-v`; reserved for future `-vv`. Covered by
   `TestVerbose_*` and `TestShortURL*`.
 
+- **CLI coherence**: Replaced the mutually exclusive `-markdown`/`-epub`
+  flags with a unified `-format` flag (`html`, `markdown`, `epub`; default
+  `markdown`). Added `-i` flag for specifying an input file containing URLs
+  (one per line, `#` comments and blank lines ignored). Added stdin piping
+  support: `cat urls.txt | deckle` reads URLs line-by-line from stdin.
+  HTML format now supports multiple URLs, concatenated with `<hr>` separators
+  (matching markdown's multi-URL behavior). Old `-epub` and `-markdown` flags
+  kept as backward-compatible aliases. Refactored `run()` into
+  `runEpub`/`runMarkdown`/`runHTML` for clarity. Added `collectAllURLs()` to
+  gather URLs from all sources (-i file, positional args, stdin) and
+  `readURLLines()` as the shared reader. Covered by `TestRun_InputFileFlag`,
+  `TestRun_StdinPipe*`, `TestRun_MultiURLHTML`, `TestCollectAllURLs_*`,
+  `TestReadURLLines*`, `TestArticlesToHTML*`, and others (20+ new tests).
+
 ## APPROVED
 
-### CLI coherence
-
-The CLI is kind of complicated right now.
-
-Having positional arguments as URLs or file lists is complicated.
-
-add a "format" option which is one of html, markdown, or epub. Default is markdown. This replaces the multiple mutually exclusive format options (markdown, epub, implicit html)
-add -i string for "input" which takes a filename to distinguish
-probably need to define behavior when you do multiple URLs with HTML format, follow the same basic approach as we did with multiple markdown stuff and concatenate
-enable STDIN input -- enable something like the file.txt lines to be piped in, line by line. So each line is a URL to fetch. Ignore non-URL lines like those prefaced with #
+*(No items currently approved.)*
 
 ## PROPOSED
 
