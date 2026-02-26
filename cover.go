@@ -143,7 +143,7 @@ func drawTypographicCover(img *image.Gray, title string, articleCount int, title
 
 	// Date (month and year)
 	now := time.Now()
-	dateText := now.Format("Jan 2006")
+	dateText := now.Format("Jan 2, 2006")
 	dateW := font.MeasureString(metaFace, dateText).Ceil()
 	drawString(img, dateText, metaFace, (coverWidth-dateW)/2, y+metaFace.Metrics().Ascent.Ceil())
 }
