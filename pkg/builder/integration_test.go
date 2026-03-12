@@ -2,7 +2,7 @@
 // These exercise the full pipeline end-to-end: fetch → readability →
 // image optimization → heading normalization → epub generation,
 // and provide benchmarks for performance tracking.
-package main
+package builder
 
 import (
 	"archive/zip"
@@ -423,16 +423,18 @@ func TestIntegration_MultiArticleEpub(t *testing.T) {
 	os.WriteFile(urlFile, []byte(urlContent.String()), 0644)
 
 	outFile := filepath.Join(tmpDir, "reading-list.epub")
-	cfg := cliConfig{
-		opts:      optimizeOpts{maxWidth: 800, quality: 60, grayscale: true},
-		output:    outFile,
-		format:    "epub",
-		timeout:   10 * time.Second,
-		userAgent: "test-agent",
-		args:      []string{urlFile},
+	opts := Options{
+		Output:    outFile,
+		Format:    "epub",
+		MaxWidth:  800,
+		Quality:   60,
+		Grayscale: true,
+		Timeout:   10 * time.Second,
+		UserAgent: "test-agent",
+		Writer:    io.Discard,
 	}
 
-	err := run(cfg)
+	err := RunCLI("", []string{urlFile}, nil, opts)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -670,16 +672,17 @@ density for the readability algorithm to work properly.</p>
 	defer func() { fetchImageClient = saved }()
 
 	outFile := filepath.Join(t.TempDir(), "external.epub")
-	cfg := cliConfig{
-		opts:      optimizeOpts{maxWidth: 800, quality: 60},
-		output:    outFile,
-		format:    "epub",
-		timeout:   10 * time.Second,
-		userAgent: "test-agent",
-		args:      []string{srv.URL},
+	opts := Options{
+		Output:    outFile,
+		Format:    "epub",
+		MaxWidth:  800,
+		Quality:   60,
+		Timeout:   10 * time.Second,
+		UserAgent: "test-agent",
+		Writer:    io.Discard,
 	}
 
-	err := run(cfg)
+	err := Build([]string{srv.URL}, opts)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1027,23 +1030,24 @@ Additional filler text to ensure content density threshold is met.</p>
 	defer func() { fetchImageClient = saved }()
 
 	outFile := filepath.Join(t.TempDir(), "race.epub")
-	cfg := cliConfig{
-		opts:        optimizeOpts{maxWidth: 800, quality: 60},
-		output:      outFile,
-		format:      "epub",
-		timeout:     10 * time.Second,
-		userAgent:   "test-agent",
-		concurrency: 5,
-		args: []string{
-			srv.URL + "/a1",
-			srv.URL + "/a2",
-			srv.URL + "/a3",
-			srv.URL + "/a4",
-			srv.URL + "/a5",
-		},
+	opts := Options{
+		Output:      outFile,
+		Format:      "epub",
+		MaxWidth:    800,
+		Quality:     60,
+		Timeout:     10 * time.Second,
+		UserAgent:   "test-agent",
+		Concurrency: 5,
+		Writer:      io.Discard,
 	}
 
-	err := run(cfg)
+	err := Build([]string{
+		srv.URL + "/a1",
+		srv.URL + "/a2",
+		srv.URL + "/a3",
+		srv.URL + "/a4",
+		srv.URL + "/a5",
+	}, opts)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1146,15 +1150,17 @@ func TestFetchAndEmbed_PartialFailures(t *testing.T) {
 
 // TestConcurrencyFlag verifies the -concurrency flag is parsed correctly.
 func TestConcurrencyFlag(t *testing.T) {
-	// Test that run() uses the concurrency setting
-	cfg := cliConfig{
-		opts:        optimizeOpts{maxWidth: 800, quality: 60},
-		format:      "html",
-		concurrency: 0, // zero should be corrected to default
+	// Test that Build() handles zero concurrency correctly
+	opts := Options{
+		Format:      "html",
+		MaxWidth:    800,
+		Quality:     60,
+		Concurrency: 0, // zero should be corrected to default
+		Writer:      io.Discard,
 	}
-	// run will set concurrency to 5 for zero-value
+	// Build will set concurrency to 5 for zero-value
 	// Just verify it doesn't panic with concurrency=0
-	err := run(cfg)
+	err := Build(nil, opts)
 	// Expected error: no args provided
 	if err == nil {
 		t.Error("expected error (no args), but got nil")

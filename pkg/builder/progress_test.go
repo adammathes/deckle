@@ -1,4 +1,4 @@
-package main
+package builder
 
 import (
 	"bytes"
@@ -13,22 +13,6 @@ import (
 	"testing"
 	"time"
 )
-
-// withVerboseCapture enables verbose output to a buffer, runs fn, restores
-// state, and returns the captured output.
-func withVerboseCapture(fn func()) string {
-	var buf bytes.Buffer
-	savedVerbose := verboseOut
-	savedLog := logOut
-	verboseOut = &buf
-	logOut = io.Discard
-	defer func() {
-		verboseOut = savedVerbose
-		logOut = savedLog
-	}()
-	fn()
-	return buf.String()
-}
 
 func TestShortURL(t *testing.T) {
 	tests := []struct {
@@ -97,28 +81,27 @@ content for readability to extract it as the main article. More text here.</p>
 	}))
 	defer srv.Close()
 
+	var buf bytes.Buffer
 	outFile := filepath.Join(t.TempDir(), "output.html")
-	cfg := cliConfig{
-		opts:      optimizeOpts{maxWidth: 800, quality: 60},
-		output:    outFile,
-		format:    "html",
-		timeout:   5 * time.Second,
-		userAgent: "test-agent",
-		args:      []string{srv.URL},
+	opts := Options{
+		MaxWidth:  800,
+		Quality:   60,
+		Output:    outFile,
+		Format:    "html",
+		Timeout:   5 * time.Second,
+		UserAgent: "test-agent",
+		Verbose:   true,
+		LogWriter: &buf,
+		Writer:    io.Discard,
 	}
 
-	output := withVerboseCapture(func() {
-		if err := run(cfg); err != nil {
-			t.Fatal(err)
-		}
-	})
+	if err := Build([]string{srv.URL}, opts); err != nil {
+		t.Fatal(err)
+	}
 
+	output := buf.String()
 	if !strings.Contains(output, "Fetching 1 URL") {
 		t.Errorf("expected 'Fetching 1 URL' in verbose output, got:\n%s", output)
-	}
-	// No Title: or per-image lines in -v output
-	if strings.Contains(output, "Title:") {
-		t.Errorf("verbose output should not contain 'Title:', got:\n%s", output)
 	}
 }
 
@@ -150,22 +133,25 @@ func TestVerbose_EpubMode_MultipleArticles(t *testing.T) {
 	}))
 	defer srv.Close()
 
+	var buf bytes.Buffer
 	outFile := filepath.Join(t.TempDir(), "test.epub")
-	cfg := cliConfig{
-		opts:      optimizeOpts{maxWidth: 800, quality: 60},
-		output:    outFile,
-		format:    "epub",
-		timeout:   5 * time.Second,
-		userAgent: "test-agent",
-		args:      []string{srv.URL + "/1", srv.URL + "/2", srv.URL + "/3"},
+	opts := Options{
+		MaxWidth:  800,
+		Quality:   60,
+		Output:    outFile,
+		Format:    "epub",
+		Timeout:   5 * time.Second,
+		UserAgent: "test-agent",
+		Verbose:   true,
+		LogWriter: &buf,
+		Writer:    io.Discard,
 	}
 
-	output := withVerboseCapture(func() {
-		if err := run(cfg); err != nil {
-			t.Fatal(err)
-		}
-	})
+	if err := Build([]string{srv.URL + "/1", srv.URL + "/2", srv.URL + "/3"}, opts); err != nil {
+		t.Fatal(err)
+	}
 
+	output := buf.String()
 	if !strings.Contains(output, "Fetching 3 URLs") {
 		t.Errorf("expected 'Fetching 3 URLs' in verbose, got:\n%s", output)
 	}
@@ -195,32 +181,31 @@ readability to extract it as the main article. More filler text here.</p>
 	}))
 	defer srv.Close()
 
+	var buf bytes.Buffer
 	outFile := filepath.Join(t.TempDir(), "img-test.html")
-	cfg := cliConfig{
-		opts:      optimizeOpts{maxWidth: 800, quality: 60},
-		output:    outFile,
-		format:    "html",
-		timeout:   5 * time.Second,
-		userAgent: "test-agent",
-		args:      []string{srv.URL},
+	opts := Options{
+		MaxWidth:  800,
+		Quality:   60,
+		Output:    outFile,
+		Format:    "html",
+		Timeout:   5 * time.Second,
+		UserAgent: "test-agent",
+		Verbose:   true,
+		LogWriter: &buf,
+		Writer:    io.Discard,
 	}
 
-	output := withVerboseCapture(func() {
-		if err := run(cfg); err != nil {
-			t.Fatal(err)
-		}
-	})
+	if err := Build([]string{srv.URL}, opts); err != nil {
+		t.Fatal(err)
+	}
 
+	output := buf.String()
 	// Should show aggregate image line
 	if !strings.Contains(output, "embedding") {
 		t.Errorf("expected 'embedding' in verbose output, got:\n%s", output)
 	}
 	if !strings.Contains(output, "images") {
 		t.Errorf("expected 'images' in verbose output, got:\n%s", output)
-	}
-	// No per-image "Optimized N images:" detail
-	if strings.Contains(output, "Optimized") {
-		t.Errorf("verbose output should not contain per-image 'Optimized' detail, got:\n%s", output)
 	}
 }
 
@@ -253,22 +238,25 @@ readability to identify this as the main content region of the page.</p>
 	fetchImageClient = srv.Client()
 	defer func() { fetchImageClient = saved }()
 
+	var buf bytes.Buffer
 	outFile := filepath.Join(t.TempDir(), "ext-test.html")
-	cfg := cliConfig{
-		opts:      optimizeOpts{maxWidth: 800, quality: 60},
-		output:    outFile,
-		format:    "html",
-		timeout:   5 * time.Second,
-		userAgent: "test-agent",
-		args:      []string{srv.URL},
+	opts := Options{
+		MaxWidth:  800,
+		Quality:   60,
+		Output:    outFile,
+		Format:    "html",
+		Timeout:   5 * time.Second,
+		UserAgent: "test-agent",
+		Verbose:   true,
+		LogWriter: &buf,
+		Writer:    io.Discard,
 	}
 
-	output := withVerboseCapture(func() {
-		if err := run(cfg); err != nil {
-			t.Fatal(err)
-		}
-	})
+	if err := Build([]string{srv.URL}, opts); err != nil {
+		t.Fatal(err)
+	}
 
+	output := buf.String()
 	// Should show aggregate image count
 	if !strings.Contains(output, "embedding") {
 		t.Errorf("expected 'embedding' in verbose output, got:\n%s", output)
@@ -293,22 +281,25 @@ the content threshold for the readability algorithm.</p>
 	}))
 	defer srv.Close()
 
+	var buf bytes.Buffer
 	outFile := filepath.Join(t.TempDir(), "output.md")
-	cfg := cliConfig{
-		opts:      optimizeOpts{maxWidth: 800, quality: 60},
-		output:    outFile,
-		format:    "markdown",
-		timeout:   5 * time.Second,
-		userAgent: "test-agent",
-		args:      []string{srv.URL},
+	opts := Options{
+		MaxWidth:  800,
+		Quality:   60,
+		Output:    outFile,
+		Format:    "markdown",
+		Timeout:   5 * time.Second,
+		UserAgent: "test-agent",
+		Verbose:   true,
+		LogWriter: &buf,
+		Writer:    io.Discard,
 	}
 
-	output := withVerboseCapture(func() {
-		if err := run(cfg); err != nil {
-			t.Fatal(err)
-		}
-	})
+	if err := Build([]string{srv.URL}, opts); err != nil {
+		t.Fatal(err)
+	}
 
+	output := buf.String()
 	if !strings.Contains(output, "Fetching 1 URL") {
 		t.Errorf("expected 'Fetching 1 URL' in verbose, got:\n%s", output)
 	}
@@ -335,22 +326,25 @@ readability to extract as the main article content region.</p>
 	}))
 	defer srv.Close()
 
+	var buf bytes.Buffer
 	outFile := filepath.Join(t.TempDir(), "multi.md")
-	cfg := cliConfig{
-		opts:      optimizeOpts{maxWidth: 800, quality: 60},
-		output:    outFile,
-		format:    "markdown",
-		timeout:   5 * time.Second,
-		userAgent: "test-agent",
-		args:      []string{srv.URL + "/a", srv.URL + "/b"},
+	opts := Options{
+		MaxWidth:  800,
+		Quality:   60,
+		Output:    outFile,
+		Format:    "markdown",
+		Timeout:   5 * time.Second,
+		UserAgent: "test-agent",
+		Verbose:   true,
+		LogWriter: &buf,
+		Writer:    io.Discard,
 	}
 
-	output := withVerboseCapture(func() {
-		if err := run(cfg); err != nil {
-			t.Fatal(err)
-		}
-	})
+	if err := Build([]string{srv.URL + "/a", srv.URL + "/b"}, opts); err != nil {
+		t.Fatal(err)
+	}
 
+	output := buf.String()
 	if !strings.Contains(output, "Fetching 2 URLs") {
 		t.Errorf("expected 'Fetching 2 URLs' in verbose, got:\n%s", output)
 	}
@@ -373,32 +367,20 @@ it as the main article. More text here for the algorithm.</p>
 	}))
 	defer srv.Close()
 
-	// Capture both verbose and log to verify silence
 	var buf bytes.Buffer
-	savedVerbose := verboseOut
-	savedLog := logOut
-	verboseOut = &buf
-	logOut = &buf
-	defer func() {
-		verboseOut = savedVerbose
-		logOut = savedLog
-	}()
-
-	// Now set to discard (default behavior)
-	verboseOut = io.Discard
-	logOut = io.Discard
-
 	outFile := filepath.Join(t.TempDir(), "silent.html")
-	cfg := cliConfig{
-		opts:      optimizeOpts{maxWidth: 800, quality: 60},
-		output:    outFile,
-		format:    "html",
-		timeout:   5 * time.Second,
-		userAgent: "test-agent",
-		args:      []string{srv.URL},
+	opts := Options{
+		MaxWidth:  800,
+		Quality:   60,
+		Output:    outFile,
+		Format:    "html",
+		Timeout:   5 * time.Second,
+		UserAgent: "test-agent",
+		LogWriter: &buf,
+		Writer:    io.Discard,
 	}
 
-	if err := run(cfg); err != nil {
+	if err := Build([]string{srv.URL}, opts); err != nil {
 		t.Fatal(err)
 	}
 

@@ -1,7 +1,7 @@
 // HTML to XHTML sanitization for EPUB 3 compliance.
 // Converts arbitrary HTML from the web into valid XHTML suitable for
 // embedding in EPUB 3 documents.
-package main
+package builder
 
 import (
 	"bytes"

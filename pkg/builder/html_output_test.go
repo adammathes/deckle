@@ -1,6 +1,7 @@
-package main
+package builder
 
 import (
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -38,16 +39,17 @@ func TestHTMLOutput_CompleteDocument(t *testing.T) {
 	tmpDir := t.TempDir()
 	outFile := filepath.Join(tmpDir, "output.html")
 
-	cfg := cliConfig{
-		opts:      optimizeOpts{maxWidth: 800, quality: 60},
-		output:    outFile,
-		format:    "html",
-		timeout:   5 * time.Second,
-		userAgent: "test-agent",
-		args:      []string{srv.URL},
+	opts := Options{
+		Output:    outFile,
+		Format:    "html",
+		MaxWidth:  800,
+		Quality:   60,
+		Timeout:   5 * time.Second,
+		UserAgent: "test-agent",
+		Writer:    io.Discard,
 	}
 
-	err := run(cfg)
+	err := Build([]string{srv.URL}, opts)
 	if err != nil {
 		t.Fatal(err)
 	}

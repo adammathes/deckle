@@ -1,6 +1,6 @@
 // Epub generation from HTML articles using go-epub.
 // Replaces pandoc for combining multiple articles into an epub3 with TOC.
-package main
+package builder
 
 import (
 	"encoding/base64"
