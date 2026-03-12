@@ -1,6 +1,6 @@
 // Cover image generation for epub output.
 // Supports multiple cover styles: "typographic" (default), "collage", and "pattern".
-package main
+package builder
 
 import (
 	"bytes"

@@ -1,5 +1,5 @@
 // Markdown export: converts processed articles to CommonMark Markdown.
-package main
+package builder
 
 import (
 	"fmt"

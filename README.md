@@ -122,6 +122,35 @@ Epub requires `-o` for the output file. The book title is derived from: `-title`
 
 The old `-epub` and `-markdown` flags still work as aliases for `-format epub` and `-format markdown`.
 
+## Library usage
+
+Deckle can be used as a Go library via the `github.com/adammathes/deckle/pkg/builder` package:
+
+```go
+import "github.com/adammathes/deckle/pkg/builder"
+
+// Single article to markdown (written to stdout by default)
+err := builder.Build([]string{"https://example.com/article"}, builder.Options{})
+
+// Multiple articles to epub
+err = builder.Build(urls, builder.Options{
+    Format:    "epub",
+    Output:    "book.epub",
+    Grayscale: true,
+    MaxWidth:  600,
+    Quality:   50,
+})
+
+// Write HTML to a custom writer
+var buf bytes.Buffer
+err = builder.Build(urls, builder.Options{
+    Format: "html",
+    Writer: &buf,
+})
+```
+
+The `builder.Options` struct mirrors the CLI flags. Unset fields use sensible defaults (markdown format, 800px max width, quality 60, 30s timeout, concurrency 5).
+
 ## Origin
 
 I asked AI to give me some reading lists on topics for my ereader and a pipeline for generating epub out of it using existing nice tools. I ended up with epubs with literally hundreds of megabytes of images and garbage in them that often didn't even get through the conversion process to epub! Or were invalid epubs. So I rolled up my sleeves, then rolled them back up and told AI to make this.

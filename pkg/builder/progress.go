@@ -1,6 +1,6 @@
 // Verbose output for deckle.
 // Default: no output except errors. With -v, simple summary lines on stderr.
-package main
+package builder
 
 import (
 	"fmt"
@@ -9,6 +9,10 @@ import (
 	"strings"
 	"sync/atomic"
 )
+
+// logOut is the writer for detailed informational output (warnings, per-URL
+// status). Defaults to io.Discard (silent). Enabled by -v.
+var logOut io.Writer = io.Discard
 
 // verboseOut is the writer for verbose summary lines. Set to os.Stderr
 // when -v is specified, otherwise io.Discard (silent by default).

@@ -1,8 +1,9 @@
-package main
+package builder
 
 import (
 	"encoding/base64"
 	"image/color"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -182,12 +183,12 @@ func TestArticlesToMarkdown_Empty(t *testing.T) {
 // ---------- integration tests via run() ----------
 
 func TestRun_FormatValidation(t *testing.T) {
-	cfg := cliConfig{
-		format:      "invalid",
-		concurrency: 1,
-		args:        []string{"https://example.com"},
+	opts := Options{
+		Format:      "invalid",
+		Concurrency: 1,
+		Writer:      io.Discard,
 	}
-	err := run(cfg)
+	err := Build([]string{"https://example.com"}, opts)
 	if err == nil {
 		t.Fatal("expected error for invalid format")
 	}
@@ -207,19 +208,20 @@ func TestRun_MarkdownMode_SingleURL(t *testing.T) {
 	tmpDir := t.TempDir()
 	outFile := filepath.Join(tmpDir, "out.md")
 
-	cfg := cliConfig{
-		opts:        optimizeOpts{maxWidth: 800, quality: 60},
-		output:      outFile,
-		format:      "markdown",
-		timeout:     5 * time.Second,
-		userAgent:   "test-agent",
-		concurrency: 2,
-		args:        []string{srv.URL},
+	opts := Options{
+		MaxWidth:    800,
+		Quality:     60,
+		Output:      outFile,
+		Format:      "markdown",
+		Timeout:     5 * time.Second,
+		UserAgent:   "test-agent",
+		Concurrency: 2,
+		Writer:      io.Discard,
 	}
 	logOut = os.Stderr // ensure logOut is set
 
-	if err := run(cfg); err != nil {
-		t.Fatalf("run() error: %v", err)
+	if err := Build([]string{srv.URL}, opts); err != nil {
+		t.Fatalf("Build() error: %v", err)
 	}
 
 	data, err := os.ReadFile(outFile)
@@ -262,18 +264,19 @@ func TestRun_MarkdownMode_MultiURL(t *testing.T) {
 	tmpDir := t.TempDir()
 	outFile := filepath.Join(tmpDir, "combined.md")
 
-	cfg := cliConfig{
-		opts:        optimizeOpts{maxWidth: 800, quality: 60},
-		output:      outFile,
-		format:      "markdown",
-		timeout:     5 * time.Second,
-		userAgent:   "test-agent",
-		concurrency: 2,
-		args:        []string{srv.URL + "/article1", srv.URL + "/article2"},
+	opts := Options{
+		MaxWidth:    800,
+		Quality:     60,
+		Output:      outFile,
+		Format:      "markdown",
+		Timeout:     5 * time.Second,
+		UserAgent:   "test-agent",
+		Concurrency: 2,
+		Writer:      io.Discard,
 	}
 
-	if err := run(cfg); err != nil {
-		t.Fatalf("run() error: %v", err)
+	if err := Build([]string{srv.URL + "/article1", srv.URL + "/article2"}, opts); err != nil {
+		t.Fatalf("Build() error: %v", err)
 	}
 
 	data, err := os.ReadFile(outFile)
@@ -316,18 +319,19 @@ is long enough to satisfy the readability content extraction algorithm.</p>
 	tmpDir := t.TempDir()
 	outFile := filepath.Join(tmpDir, "img_test.md")
 
-	cfg := cliConfig{
-		opts:        optimizeOpts{maxWidth: 800, quality: 60},
-		output:      outFile,
-		format:      "markdown",
-		timeout:     5 * time.Second,
-		userAgent:   "test-agent",
-		concurrency: 2,
-		args:        []string{srv.URL},
+	opts := Options{
+		MaxWidth:    800,
+		Quality:     60,
+		Output:      outFile,
+		Format:      "markdown",
+		Timeout:     5 * time.Second,
+		UserAgent:   "test-agent",
+		Concurrency: 2,
+		Writer:      io.Discard,
 	}
 
-	if err := run(cfg); err != nil {
-		t.Fatalf("run() error: %v", err)
+	if err := Build([]string{srv.URL}, opts); err != nil {
+		t.Fatalf("Build() error: %v", err)
 	}
 
 	data, err := os.ReadFile(outFile)
@@ -370,18 +374,19 @@ This paragraph provides sufficient content for readability extraction.</p>
 	defer articleSrv.Close()
 
 	outFile := filepath.Join(t.TempDir(), "out.md")
-	cfg := cliConfig{
-		opts:        optimizeOpts{maxWidth: 800, quality: 60},
-		output:      outFile,
-		format:      "markdown",
-		timeout:     5 * time.Second,
-		userAgent:   "test-agent",
-		concurrency: 2,
-		args:        []string{articleSrv.URL},
+	opts := Options{
+		MaxWidth:    800,
+		Quality:     60,
+		Output:      outFile,
+		Format:      "markdown",
+		Timeout:     5 * time.Second,
+		UserAgent:   "test-agent",
+		Concurrency: 2,
+		Writer:      io.Discard,
 	}
 
-	if err := run(cfg); err != nil {
-		t.Fatalf("run() error: %v", err)
+	if err := Build([]string{articleSrv.URL}, opts); err != nil {
+		t.Fatalf("Build() error: %v", err)
 	}
 	if imageHits > 0 {
 		t.Errorf("markdown mode should not download external images, but image server was hit %d time(s)", imageHits)

@@ -1,6 +1,6 @@
 // Image optimization for HTML with base64-embedded images.
 // Resizes, converts to grayscale, JPEG-encodes for e-readers.
-package main
+package builder
 
 import (
 	"bytes"

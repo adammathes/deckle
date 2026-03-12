@@ -27,27 +27,42 @@ The HTML processing pipeline has two stages:
 
 EPUB assembly (`epub.go`) is separate from sanitization.
 
-### Current file layout
+### Architecture overview
 
-| File | Lines | Role |
-|------|-------|------|
-| `sanitize.go` | ~350 | HTML→XHTML sanitization (xhtmlSanitizer struct) |
-| `sanitize_test.go` | ~540 | Sanitization unit tests |
-| `sanitize_fuzz_test.go` | ~90 | Fuzz testing for sanitizeForXHTML |
-| `epub.go` | ~250 | EPUB building (buildEpub, TOC, image extraction) |
-| `epub_test.go` | ~280 | EPUB assembly tests |
-| `imgoptimize.go` | ~530 | Image optimization + lazy-load promotion |
-| `imgoptimize_test.go` | ~830 | Image optimization tests |
-| `cover.go` | 370 | Cover image generation |
-| `main.go` | ~380 | CLI + pipeline orchestration |
-| `progress.go` | ~40 | Verbose output (`-v` flag) |
-| `fetch.go` | 233 | HTTP fetching with TLS fingerprinting |
-| `headings.go` | 197 | Title extraction, heading normalization |
-| `ssrf.go` | 77 | SSRF protection |
-| `readability.go` | 39 | Readability extraction wrapper |
+The project is split into two packages:
+
+- **`main.go`** — thin CLI wrapper that parses flags and calls `builder.RunCLI`
+- **`pkg/builder/`** — all library logic (fetching, image optimization,
+  sanitization, epub assembly, cover generation)
+
+The public API is `builder.Build(urls, Options)` for direct library use and
+`builder.RunCLI(...)` for CLI-style URL collection (input file, args, stdin).
+
+### Key files in `pkg/builder/`
+
+| File | Role |
+|------|------|
+| `builder.go` | Public API: `Build`, `RunCLI`, `Options` struct |
+| `sanitize.go` | HTML→XHTML sanitization (xhtmlSanitizer struct) |
+| `epub.go` | EPUB building (buildEpub, TOC, image extraction) |
+| `imgoptimize.go` | Image optimization + lazy-load promotion |
+| `cover.go` | Cover image generation |
+| `fetch.go` | HTTP fetching with TLS fingerprinting |
+| `headings.go` | Title extraction, heading normalization |
+| `ssrf.go` | SSRF protection |
+| `readability.go` | Readability extraction wrapper |
+| `progress.go` | Verbose output (`-v` flag) |
+| `markdown.go` | HTML→Markdown conversion |
 
 ---
 ## COMPLETED
+
+- **Library export (`pkg/builder`)**: Extracted all processing logic from
+  `main.go` into `pkg/builder/`. The public API is `builder.Build(urls, Options)`
+  for programmatic use and `builder.RunCLI(...)` for CLI-style URL collection.
+  `main.go` is now a thin CLI wrapper (~90 lines) that parses flags and calls
+  `RunCLI`. The `Options` struct exposes all configuration with sensible defaults.
+  All existing tests were migrated to `pkg/builder/` and pass unchanged.
 
 - **Extract sanitizeForXHTML into its own file**: Moved all XHTML
   sanitization code from `epub.go` into `sanitize.go`, with corresponding
