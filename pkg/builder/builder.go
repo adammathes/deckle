@@ -112,7 +112,9 @@ func (o *Options) applyDefaults() {
 	}
 }
 
-// Build processes the given URLs and produces output in the specified format.
+// Build processes the given inputs and produces output in the specified format.
+// Each input may be an HTTP(S) URL or a local file path (HTML or Markdown).
+// Local paths start with /, ./, ../, ~/, or file://.
 // For epub format, Options.Output must be set.
 //
 // This is the main entry point for using deckle as a library.
@@ -130,7 +132,7 @@ func Build(urls []string, opts Options) error {
 	}
 
 	if len(urls) == 0 {
-		return fmt.Errorf("no URLs provided")
+		return fmt.Errorf("no inputs provided")
 	}
 
 	// Configure package-level settings from options.
@@ -366,7 +368,7 @@ func RunCLI(inputFile string, args []string, stdinReader io.Reader, opts Options
 		return err
 	}
 	if len(urls) == 0 {
-		return fmt.Errorf("no URLs provided")
+		return fmt.Errorf("no inputs provided")
 	}
 
 	// Configure package-level settings from options.

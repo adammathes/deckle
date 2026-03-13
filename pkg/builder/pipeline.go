@@ -3,20 +3,96 @@ package builder
 
 import (
 	"bufio"
+	"bytes"
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/yuin/goldmark"
 )
 
-// processURL fetches a URL and runs the full article pipeline.
+// isLocalPath returns true if the input looks like a local file path rather than a URL.
+func isLocalPath(s string) bool {
+	return strings.HasPrefix(s, "/") || strings.HasPrefix(s, "./") || strings.HasPrefix(s, "../") ||
+		strings.HasPrefix(s, "~/") || strings.HasPrefix(s, "file://")
+}
+
+// resolveLocalPath converts a local path (including file:// URIs and ~/…) to an absolute path.
+func resolveLocalPath(s string) string {
+	if strings.HasPrefix(s, "file://") {
+		s = strings.TrimPrefix(s, "file://")
+	}
+	if strings.HasPrefix(s, "~/") {
+		if home, err := os.UserHomeDir(); err == nil {
+			s = filepath.Join(home, s[2:])
+		}
+	}
+	return s
+}
+
+// processLocalFile reads a local HTML or Markdown file and runs it through
+// the image and heading pipeline. Markdown files are converted to HTML first.
+// Readability extraction is skipped since local content is already clean.
+func processLocalFile(path string, opts optimizeOpts, titleOverride string, concurrency int) (string, string, sourceInfo, error) {
+	resolved := resolveLocalPath(path)
+
+	data, err := os.ReadFile(resolved)
+	if err != nil {
+		return "", "", sourceInfo{}, fmt.Errorf("reading local file %s: %w", path, err)
+	}
+
+	ext := strings.ToLower(filepath.Ext(resolved))
+	var htmlContent string
+
+	switch ext {
+	case ".md", ".markdown":
+		var buf bytes.Buffer
+		if err := goldmark.Convert(data, &buf); err != nil {
+			return "", "", sourceInfo{}, fmt.Errorf("converting markdown %s: %w", path, err)
+		}
+		htmlContent = buf.String()
+	default:
+		// Treat as HTML (.html, .htm, or anything else)
+		htmlContent = string(data)
+	}
+
+	// Derive title: use override, or extract from <h1>/<title>, or use filename.
+	title := titleOverride
+	if title == "" {
+		title = extractTitle(htmlContent)
+		if title == "" || title == "Untitled" {
+			// Use filename without extension as title
+			title = strings.TrimSuffix(filepath.Base(resolved), filepath.Ext(resolved))
+		}
+	}
+
+	fmt.Fprintf(logOut, "Title: %s\n", title)
+
+	// Process images — skip fetching for data URIs (already embedded),
+	// but still handle any external image URLs in the content.
+	result := processArticleImages([]byte(htmlContent), opts, concurrency)
+
+	src := sourceInfo{}
+	final := normalizeHeadings(string(result), title, src)
+
+	return final, title, src, nil
+}
+
+// processURL fetches a URL (or reads a local file) and runs the full article pipeline.
 // Returns the final HTML string, article title, source info, and any error.
 // concurrency controls how many images are fetched in parallel.
 func processURL(rawURL string, opts optimizeOpts, timeout time.Duration, userAgent string, titleOverride string, concurrency int) (string, string, sourceInfo, error) {
 	if concurrency < 1 {
 		concurrency = 1
+	}
+
+	// Local file path: read from disk, skip fetch and readability.
+	if isLocalPath(rawURL) {
+		return processLocalFile(rawURL, opts, titleOverride, concurrency)
 	}
 
 	htmlBytes, pageURL, err := fetchHTML(rawURL, timeout, userAgent)
