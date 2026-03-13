@@ -18,6 +18,8 @@ var (
 	imgDataURIRe = regexp.MustCompile(`(<img\b[^>]*?\bsrc\s*=\s*")data:([^;]+);base64,([^"]*)(")`)
 	// Strips HTML tags for plain text extraction
 	stripTagsRe = regexp.MustCompile(`<[^>]*>`)
+	// Matches <a href="URL"> for rewriting cross-article links
+	hrefRe = regexp.MustCompile(`(<a\b[^>]*?\bhref\s*=\s*")([^"]*)(")`)
 )
 
 // epubArticle holds a processed article and its metadata for epub inclusion.
@@ -119,6 +121,49 @@ func extractImages(e *epub.Epub, body string, chapterIdx int) (string, error) {
 	return result, lastErr
 }
 
+// normalizeArticleURL strips the scheme and trailing slash from a URL and
+// lowercases it, producing a canonical key for cross-article link matching.
+func normalizeArticleURL(u string) string {
+	u = strings.ToLower(u)
+	u = strings.TrimPrefix(u, "https://")
+	u = strings.TrimPrefix(u, "http://")
+	u = strings.TrimSuffix(u, "/")
+	return u
+}
+
+// rewriteArticleLinks rewrites <a href="..."> links in each article's HTML
+// when the href matches another article's URL in the EPUB. This turns external
+// links into internal cross-chapter navigation.
+func rewriteArticleLinks(articles []epubArticle) {
+	// Build normalized URL -> internal filename mapping.
+	urlMap := make(map[string]string, len(articles))
+	for i, a := range articles {
+		if a.URL == "" {
+			continue
+		}
+		filename := fmt.Sprintf("article%03d.xhtml", i+1)
+		urlMap[normalizeArticleURL(a.URL)] = filename
+	}
+	if len(urlMap) == 0 {
+		return
+	}
+
+	// Rewrite matching hrefs in every article's HTML.
+	for i := range articles {
+		articles[i].HTML = hrefRe.ReplaceAllStringFunc(articles[i].HTML, func(match string) string {
+			parts := hrefRe.FindStringSubmatch(match)
+			if parts == nil {
+				return match
+			}
+			href := parts[2]
+			if filename, ok := urlMap[normalizeArticleURL(href)]; ok {
+				return parts[1] + filename + parts[3]
+			}
+			return match
+		})
+	}
+}
+
 // buildTOCBody generates the HTML body for the front matter table of contents.
 // It creates a linked list of articles with their authors and source URLs.
 func buildTOCBody(articles []epubArticle) string {
@@ -217,6 +262,9 @@ blockquote { margin-left: 1em; padding-left: 0.5em; border-left: 2px solid #999;
 			}
 		}
 	}
+
+	// Rewrite external URLs to internal EPUB chapter links
+	rewriteArticleLinks(articles)
 
 	// Add front matter table of contents
 	tocBody := buildTOCBody(articles)

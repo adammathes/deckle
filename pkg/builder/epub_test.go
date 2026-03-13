@@ -317,6 +317,155 @@ func TestBuildEpub_NoTitleFallback(t *testing.T) {
 	}
 }
 
+func TestNormalizeArticleURL(t *testing.T) {
+	tests := []struct {
+		input string
+		want  string
+	}{
+		{"https://example.com/page", "example.com/page"},
+		{"http://example.com/page", "example.com/page"},
+		{"https://example.com/page/", "example.com/page"},
+		{"HTTPS://Example.COM/Path", "example.com/path"},
+		{"example.com/page", "example.com/page"},
+		{"https://example.com", "example.com"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.input, func(t *testing.T) {
+			got := normalizeArticleURL(tt.input)
+			if got != tt.want {
+				t.Errorf("normalizeArticleURL(%q) = %q, want %q", tt.input, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestRewriteArticleLinks(t *testing.T) {
+	articles := []epubArticle{
+		{
+			HTML: `<body><p>Summary with <a href="https://example.com/first">link one</a> and <a href="https://example.com/second">link two</a> and <a href="https://other.com/unrelated">external</a>.</p></body>`,
+			URL:  "", // local file, no URL
+		},
+		{
+			HTML:  `<body><h1>First</h1><p>Content.</p></body>`,
+			Title: "First",
+			URL:   "https://example.com/first",
+		},
+		{
+			HTML:  `<body><h1>Second</h1><p>Content.</p></body>`,
+			Title: "Second",
+			URL:   "https://example.com/second",
+		},
+	}
+
+	rewriteArticleLinks(articles)
+
+	// Summary should have rewritten links
+	if !strings.Contains(articles[0].HTML, `href="article002.xhtml"`) {
+		t.Errorf("expected link to article002.xhtml, got: %s", articles[0].HTML)
+	}
+	if !strings.Contains(articles[0].HTML, `href="article003.xhtml"`) {
+		t.Errorf("expected link to article003.xhtml, got: %s", articles[0].HTML)
+	}
+	// External link should remain unchanged
+	if !strings.Contains(articles[0].HTML, `href="https://other.com/unrelated"`) {
+		t.Errorf("external link should be unchanged, got: %s", articles[0].HTML)
+	}
+}
+
+func TestRewriteArticleLinks_TrailingSlash(t *testing.T) {
+	articles := []epubArticle{
+		{
+			HTML: `<body><a href="https://example.com/page/">link</a></body>`,
+			URL:  "",
+		},
+		{
+			HTML: `<body><p>Page content</p></body>`,
+			URL:  "https://example.com/page",
+		},
+	}
+
+	rewriteArticleLinks(articles)
+
+	if !strings.Contains(articles[0].HTML, `href="article002.xhtml"`) {
+		t.Errorf("trailing slash href should match, got: %s", articles[0].HTML)
+	}
+}
+
+func TestRewriteArticleLinks_HttpHttps(t *testing.T) {
+	articles := []epubArticle{
+		{
+			HTML: `<body><a href="http://example.com/page">link</a></body>`,
+			URL:  "",
+		},
+		{
+			HTML: `<body><p>Content</p></body>`,
+			URL:  "https://example.com/page",
+		},
+	}
+
+	rewriteArticleLinks(articles)
+
+	if !strings.Contains(articles[0].HTML, `href="article002.xhtml"`) {
+		t.Errorf("http href should match https article URL, got: %s", articles[0].HTML)
+	}
+}
+
+func TestRewriteArticleLinks_NoMatch(t *testing.T) {
+	articles := []epubArticle{
+		{
+			HTML: `<body><a href="https://other.com/page">link</a></body>`,
+			URL:  "",
+		},
+		{
+			HTML: `<body><p>Content</p></body>`,
+			URL:  "https://example.com/page",
+		},
+	}
+
+	rewriteArticleLinks(articles)
+
+	if !strings.Contains(articles[0].HTML, `href="https://other.com/page"`) {
+		t.Errorf("non-matching link should remain, got: %s", articles[0].HTML)
+	}
+}
+
+func TestRewriteArticleLinks_CrossArticle(t *testing.T) {
+	articles := []epubArticle{
+		{
+			HTML: `<body><p>Links to <a href="https://example.com/b">B</a></p></body>`,
+			URL:  "https://example.com/a",
+		},
+		{
+			HTML: `<body><p>Links to <a href="https://example.com/a">A</a></p></body>`,
+			URL:  "https://example.com/b",
+		},
+	}
+
+	rewriteArticleLinks(articles)
+
+	if !strings.Contains(articles[0].HTML, `href="article002.xhtml"`) {
+		t.Errorf("article A should link to article B internally, got: %s", articles[0].HTML)
+	}
+	if !strings.Contains(articles[1].HTML, `href="article001.xhtml"`) {
+		t.Errorf("article B should link to article A internally, got: %s", articles[1].HTML)
+	}
+}
+
+func TestRewriteArticleLinks_NoURLArticles(t *testing.T) {
+	// All articles are local files with no URLs — nothing to rewrite
+	articles := []epubArticle{
+		{HTML: `<body><a href="https://example.com">link</a></body>`, URL: ""},
+		{HTML: `<body><p>Content</p></body>`, URL: ""},
+	}
+
+	rewriteArticleLinks(articles)
+
+	// Link should remain unchanged since no article has a URL
+	if !strings.Contains(articles[0].HTML, `href="https://example.com"`) {
+		t.Errorf("link should be unchanged when no articles have URLs, got: %s", articles[0].HTML)
+	}
+}
+
 func TestBuildEpub_EpubCheck(t *testing.T) {
 	// Only run if epubcheck is available on PATH
 	if _, err := exec.LookPath("epubcheck"); err != nil {
