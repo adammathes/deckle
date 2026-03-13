@@ -22,6 +22,7 @@ require (
 	github.com/gogs/chardet v0.0.0-20211120154057-b7413eaefb8f // indirect
 	github.com/klauspost/compress v1.17.4 // indirect
 	github.com/vincent-petithory/dataurl v1.0.0 // indirect
+	github.com/yuin/goldmark v1.7.16 // indirect
 	golang.org/x/crypto v0.48.0 // indirect
 	golang.org/x/sys v0.41.0 // indirect
 	golang.org/x/text v0.34.0 // indirect
